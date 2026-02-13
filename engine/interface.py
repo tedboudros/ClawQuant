@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+from inspect import isawaitable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -107,11 +108,13 @@ class AIInterface:
         llm: LLMProvider = providers[0]
 
         # Build messages with system prompt
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
+        system_prompt = SYSTEM_PROMPT
+        messages = [{"role": "system", "content": system_prompt}] + history
+        available_tools = TOOLS + self._collect_plugin_tools()
 
         # Call LLM with tools
         try:
-            result = await llm.tool_call(messages, TOOLS)
+            result = await llm.tool_call(messages, available_tools)
         except Exception:
             logger.exception("LLM call failed")
             return "Sorry, I couldn't process that right now. Please try again."
@@ -144,7 +147,7 @@ class AIInterface:
 
             try:
                 final_response = await llm.complete(
-                    [{"role": "system", "content": SYSTEM_PROMPT}] + history
+                    [{"role": "system", "content": system_prompt}] + history
                 )
             except Exception:
                 logger.exception("Final response generation failed")
@@ -187,10 +190,78 @@ class AIInterface:
                 case "run_analysis":
                     return await self._tool_run_analysis(args)
                 case _:
+                    plugin_result = await self._execute_plugin_tool(name, args, source)
+                    if plugin_result is not None:
+                        return plugin_result
                     return f"Unknown tool: {name}"
         except Exception as e:
             logger.exception("Tool %s failed", name)
             return f"Error executing {name}: {e}"
+
+    def _iter_plugins(self) -> list[Any]:
+        """Return registered plugin instances across protocol registries."""
+        protocol_keys = ("market_data", "input", "output", "llm", "agent", "risk_rule", "task_handler")
+        seen: set[int] = set()
+        plugins: list[Any] = []
+        for key in protocol_keys:
+            try:
+                items = self._registry.get_all(key)
+            except KeyError:
+                continue
+            for item in items:
+                item_id = id(item)
+                if item_id in seen:
+                    continue
+                seen.add(item_id)
+                plugins.append(item)
+        return plugins
+
+    def _collect_plugin_tools(self) -> list[dict]:
+        """Collect tool schemas exposed by plugins via get_tools()."""
+        tools: list[dict] = []
+        existing_names = {
+            t.get("function", {}).get("name")
+            for t in TOOLS
+            if isinstance(t, dict)
+        }
+        for plugin in self._iter_plugins():
+            get_tools = getattr(plugin, "get_tools", None)
+            if get_tools is None:
+                continue
+            try:
+                plugin_tools = get_tools() or []
+            except Exception:
+                logger.exception("Plugin %s get_tools() failed", getattr(plugin, "name", "?"))
+                continue
+            for tool in plugin_tools:
+                if not isinstance(tool, dict):
+                    continue
+                name = tool.get("function", {}).get("name")
+                if not name or name in existing_names:
+                    continue
+                tools.append(tool)
+                existing_names.add(name)
+        return tools
+
+    async def _execute_plugin_tool(self, name: str, args: dict, source: str) -> str | None:
+        """Attempt to execute a plugin-provided tool via call_tool()."""
+        for plugin in self._iter_plugins():
+            call_tool = getattr(plugin, "call_tool", None)
+            if call_tool is None:
+                continue
+            try:
+                try:
+                    result = call_tool(name=name, args=args, source=source, interface=self)
+                except TypeError:
+                    result = call_tool(name, args)
+                if isawaitable(result):
+                    result = await result
+            except Exception:
+                logger.exception("Plugin %s call_tool() failed for %s", getattr(plugin, "name", "?"), name)
+                continue
+            if result is not None:
+                return str(result)
+        return None
 
     # ------------------------------------------------------------------
     # Tool implementations

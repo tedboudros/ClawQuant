@@ -170,7 +170,7 @@ TOOLS = [
                     },
                     "handler": {
                         "type": "string",
-                        "description": "Handler name (e.g., monitoring.check_exit)",
+                        "description": "Registered task handler name",
                     },
                     "cron_expression": {
                         "type": "string",

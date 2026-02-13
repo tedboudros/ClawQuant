@@ -179,6 +179,7 @@ async def _load_plugins(config, bus, store, registry, ai_interface: AIInterface)
     # 5. Load task handlers
     try:
         from plugins.task_handlers.comparison import ComparisonHandler
+        from plugins.task_handlers.news import NewsBriefHandler
         from plugins.task_handlers.notifications import NotificationsHandler
 
         handler = ComparisonHandler(
@@ -193,6 +194,10 @@ async def _load_plugins(config, bus, store, registry, ai_interface: AIInterface)
         notifications_handler = NotificationsHandler(registry=registry)
         registry.register("task_handler", notifications_handler)
         logger.info("Loaded task handler: %s", notifications_handler.name)
+
+        news_handler = NewsBriefHandler(registry=registry)
+        registry.register("task_handler", news_handler)
+        logger.info("Loaded task handler: %s", news_handler.name)
     except Exception as e:
         logger.error("Failed to load task handlers: %s", e)
 
