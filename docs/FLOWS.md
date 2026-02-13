@@ -8,8 +8,9 @@ Core event flows through the system. Every flow is a chain of events connected b
 
 ```mermaid
 sequenceDiagram
-    participant Plugin as Integration Plugin
+    participant Plugin as Integration Plugin (dumb pipe)
     participant API as Core HTTP API
+    participant AIF as AI Interface (tool-calling)
     participant Bus as EventBus
     participant Data as Data Layer
     participant AI as Orchestrator
@@ -17,8 +18,10 @@ sequenceDiagram
     participant Out as Output Plugin
     participant Files as Files + SQLite
 
-    Plugin->>API: POST /events (integration.input)
-    API->>Bus: publish event
+    Plugin->>API: POST /events (raw user text)
+    API->>AIF: forward to AI Interface
+    AIF->>AIF: LLM determines intent via tool-calling
+    AIF->>Bus: publish event (integration.input)
     Bus->>Files: append to events/YYYY-MM-DD.jsonl
 
     Bus->>Data: assemble context pack
@@ -85,12 +88,15 @@ sequenceDiagram
 ### Day 0: User responds
 
 ```
-8. integration.input via Telegram
+8. integration.input via Telegram (raw text forwarded to AI Interface)
    "bought at 130"
 
-9. position.confirmed
-   → Human portfolio: NVDA opened at $130 (positions/human/NVDA.json)
-   → Both portfolios aligned
+9. AI Interface uses tool-calling:
+   LLM calls confirm_trade(ticker="NVDA", price=130)
+
+10. position.confirmed
+    → Human portfolio: NVDA opened at $130 (positions/human/NVDA.json)
+    → Both portfolios aligned
 ```
 
 ### Day 60: Daily monitor detects earnings
@@ -140,9 +146,13 @@ sequenceDiagram
 23. signal.delivered via Telegram
     "SELL NVDA | Current: $131.20 | AI P&L: +0.9%"
 
-24. integration.input: "sold at 125"
+24. integration.input via Telegram (raw text forwarded to AI Interface):
+    "sold at 125"
 
-25. position.confirmed (close)
+25. AI Interface uses tool-calling:
+    LLM calls close_position(ticker="NVDA", price=125)
+
+26. position.confirmed (close)
     → Human portfolio: NVDA closed at $125.00 | P&L: -3.8%
     → DIVERGENCE: AI got +0.9%, human got -3.8%
 ```
@@ -168,9 +178,13 @@ sequenceDiagram
 ```
 1. signal.delivered: "BUY AAPL at $180"
 
-2. integration.input: "nah, earnings will disappoint. skipping"
+2. integration.input via Telegram (raw text forwarded to AI Interface):
+   "nah, earnings will disappoint. skipping"
 
-3. position.skipped
+3. AI Interface uses tool-calling:
+   LLM calls skip_trade(ticker="AAPL", reason="thinks earnings will disappoint")
+
+4. position.skipped
    → AI portfolio: AAPL opened at $180 (positions/ai/AAPL.json)
    → Human portfolio: no file created
    → user_notes: "thinks earnings will disappoint"
@@ -187,10 +201,13 @@ sequenceDiagram
 ## Flow: Human-Initiated Trade
 
 ```
-1. integration.input via Telegram
+1. integration.input via Telegram (raw text forwarded to AI Interface):
    "I just bought 200 TSLA at 245. Elon tweet."
 
-2. position.confirmed
+2. AI Interface uses tool-calling:
+   LLM calls user_initiated_trade(ticker="TSLA", price=245, size=200, notes="Elon tweet")
+
+3. position.confirmed
    → Human portfolio: TSLA at $245 (positions/human/TSLA.json)
    → AI portfolio: no TSLA position
    → signal_id: null (no AI signal)

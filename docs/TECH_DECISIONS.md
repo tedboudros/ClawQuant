@@ -23,9 +23,9 @@ Key decisions, alternatives considered, and reasoning.
 
 ---
 
-## ADR-2: Minimal Dependencies (5 Core Packages)
+## ADR-2: Minimal Dependencies (6 Core Packages)
 
-**Decision**: The core system has exactly 5 pip dependencies. Everything else is Python stdlib.
+**Decision**: The core system has exactly 6 pip dependencies. Everything else is Python stdlib.
 
 | Package | Purpose | Why not stdlib |
 |---------|---------|----------------|
@@ -34,16 +34,18 @@ Key decisions, alternatives considered, and reasoning.
 | `python-dotenv` | .env loading | stdlib has no `.env` support |
 | `aiohttp` | HTTP server | stdlib `http.server` is sync-only |
 | `httpx` | HTTP client | stdlib `urllib` is sync and painful |
+| `questionary` | Interactive CLI wizard | stdlib `input()` is too primitive for multi-select, validation |
 
 **Alternatives considered**:
 - FastAPI + uvicorn: More features, but pulls in starlette, pydantic (already have it), jinja2, etc. 20+ transitive deps
 - Flask: Not async-native
 - No HTTP server (Telegram only): Couples the core to a specific integration
+- Click/Typer for CLI: Heavier than needed; argparse + questionary covers our use case
 
 **Rationale**:
 - Fewer dependencies = fewer supply chain risks, fewer version conflicts, smaller install
 - The system should run on a Raspberry Pi, a cheap VPS, or a laptop
-- Integration plugins add their own dependencies (e.g., `python-telegram-bot`) -- only installed if used
+- Integration plugins add their own dependencies -- only installed if used
 - stdlib `sqlite3`, `json`, `asyncio`, `pathlib`, `imaplib`, `smtplib`, `math`, `statistics` cover most needs
 
 ---
@@ -204,6 +206,44 @@ Key decisions, alternatives considered, and reasoning.
 
 ---
 
+## ADR-13: Self-Describing Plugins (PLUGIN_META)
+
+**Decision**: Every plugin file declares a `PLUGIN_META` dict at module level that fully describes the plugin: name, display name, description, category, protocols it implements, class name, pip dependencies, setup instructions, and config fields.
+
+**Alternatives considered**:
+- Decorator-based registration: Requires importing a framework; plugins can't be scanned without execution
+- Central registry file: Single point of failure, merge conflicts, manual upkeep
+- Setuptools entry points: Standard but too heavy, requires packaging each plugin
+
+**Rationale**:
+- **Zero-registration**: Adding a plugin = adding a file. The CLI scanner (`cli/scanner.py`) walks `plugins/` and collects `PLUGIN_META` automatically.
+- **Static discoverability**: The CLI can show all available plugins, their dependencies, and config fields without instantiating anything.
+- **Setup wizard integration**: `PLUGIN_META.config_fields` drives the interactive wizard -- each plugin declares what config it needs, and the wizard asks the right questions.
+- **Dependency isolation**: `PLUGIN_META.pip_dependencies` tells the installer exactly what each plugin needs. Users only install what they enable.
+- **Self-documenting**: A new contributor can read any plugin file and immediately understand what it does, what it needs, and how to configure it.
+
+---
+
+## ADR-14: AI-Powered User Interface (Tool-Calling)
+
+**Decision**: All user interactions go through an AI interface (`engine/interface.py`) that uses LLM tool-calling (function calling) to understand intent and take actions. No regex, no keyword matching, no command parsing.
+
+**The 12 tools**: `confirm_trade`, `skip_trade`, `close_position`, `user_initiated_trade`, `get_portfolio`, `get_price`, `list_tasks`, `create_task`, `delete_task`, `get_memories`, `get_signals`, `run_analysis`.
+
+**Alternatives considered**:
+- Regex/keyword parsing: Fragile, English-only, breaks on typos or phrasing variations
+- Slash commands (`/confirm`, `/portfolio`): Forces users to learn syntax, not conversational
+- Hybrid (keywords + LLM fallback): Two code paths to maintain, inconsistent behavior
+
+**Rationale**:
+- **Any language**: The LLM understands "bought NVDA at 130," "j'ai achete NVDA a 130," or any other phrasing. No localization needed.
+- **No parsing code**: Zero regex patterns to maintain. The LLM decides which tool to call.
+- **Integration plugins are dumb pipes**: Telegram (and any future integration) just forwards raw text to the AI interface. This means Telegram doesn't need `input_types`, `output_types`, or message classification logic.
+- **Extensible**: Adding a new user action = adding a tool definition. No parser changes.
+- **Conversational**: Users can ask follow-up questions, get explanations, or chain actions naturally.
+
+---
+
 ## Tech Stack Summary
 
 | Component | Technology | Lines of Code (est.) |
@@ -213,17 +253,23 @@ Key decisions, alternatives considered, and reasoning.
 | Scheduler | `asyncio` loop + file reader | ~80 |
 | Data Layer | `sqlite3` + `json` + `pathlib` | ~150 |
 | Risk Engine | Pure Python math | ~100 |
-| AI Engine | `httpx` → LLM APIs | ~300 |
+| AI Engine + Interface | `httpx` -> LLM APIs, tool-calling | ~500 |
+| CLI + Setup Wizard | `argparse` + `questionary` | ~400 |
 | Config | `pydantic` + `pyyaml` | ~100 |
+| Plugins | Protocol implementations | ~1,000+ |
 
-**Total core**: ~1,000 lines of Python. The rest is agent prompts and integration plugins.
+**Total**: ~3,000+ lines of Python. Includes core, CLI, plugins, and agent prompts.
 
 ---
 
 ## Directory Structure
 
+Code lives at the repo root (not inside an `opensuperfin/` package). Imports are `from core.models import ...`, not `from opensuperfin.core.models import ...`.
+
 ```
-opensuperfin/
+OpenSuperFin/
+    install.sh                     # One-line installer script
+
     core/                          # DEFINES WHAT (protocols + models)
         protocols.py               # All 8 protocols in one file
         bus.py                     # EventBus default impl (~100 lines)
@@ -243,11 +289,12 @@ opensuperfin/
             queries.py             # TimeContext-aware data access
 
     plugins/                       # IMPLEMENTS HOW (concrete implementations)
+                                   # Each file has a PLUGIN_META dict
         market_data/
             yahoo_finance.py       # MarketDataProvider for stocks/ETFs/forex
             coingecko.py           # MarketDataProvider for crypto
         integrations/
-            telegram.py            # InputAdapter + OutputAdapter
+            telegram.py            # InputAdapter + OutputAdapter (dumb pipe)
             email.py               # InputAdapter + OutputAdapter (stdlib)
             webhook.py             # InputAdapter + OutputAdapter
             custom_loader.py       # Loads user scraper scripts
@@ -272,10 +319,17 @@ opensuperfin/
 
     engine/                        # ORCHESTRATION (wires protocols together)
         orchestrator.py            # Multi-agent pipeline
-        interface.py               # Chat interface (tool-use)
+        interface.py               # AI interface (tool-calling, 12 tools)
         tools.py                   # AI tool definitions
         memory.py                  # Memory retrieval + relevance scoring
         prompts/                   # Prompt templates
+
+    cli/                           # CLI TOOLS
+        main.py                    # argparse CLI entrypoint
+        scanner.py                 # Plugin discovery (walks plugins/, collects PLUGIN_META)
+        setup.py                   # Interactive setup wizard (questionary)
+        config_gen.py              # Generates config.yaml + .env from wizard choices
+        banner.py                  # ASCII art banner
 
     scheduler/
         runner.py                  # Asyncio scheduler loop

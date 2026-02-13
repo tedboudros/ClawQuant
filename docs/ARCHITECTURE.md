@@ -8,7 +8,7 @@ OpenSuperFin is an event-driven macro/LLM trading advisory system designed to ru
 
 - **Fully abstracted core**: The core defines WHAT happens (protocols). Plugins define HOW (implementations). The core never imports a concrete integration, market data source, or LLM provider.
 - **File-based state**: State is files on disk -- Markdown memos you can open in any editor, JSON signals you can inspect with `jq`, JSONL audit logs you can `grep`. SQLite for indexed queries. No external database servers.
-- **Minimal dependencies**: 5 core pip packages. Everything else is Python stdlib.
+- **Minimal dependencies**: 6 core pip packages. Everything else is Python stdlib.
 - **Runs on a potato**: Single async Python process, ~100MB RAM. No Docker, no PostgreSQL, no Redis, no message queues.
 
 The AI can autonomously research, monitor, schedule tasks, and produce investment memos. The human always pulls the trigger.
@@ -101,6 +101,29 @@ plugins/                       # implements protocols
 ```
 
 The plugin registry discovers and loads implementations at startup based on `config.yaml`. The core never knows which concrete implementations exist.
+
+### Plugin Metadata (PLUGIN_META)
+
+Every plugin file declares a `PLUGIN_META` dict at module level that makes the plugin self-describing:
+
+```python
+PLUGIN_META = {
+    "name": "telegram",
+    "display_name": "Telegram",
+    "description": "Send and receive messages via Telegram bot",
+    "category": "integrations",
+    "protocols": ["InputAdapter", "OutputAdapter"],
+    "class_name": "TelegramPlugin",
+    "pip_dependencies": [],
+    "setup_instructions": "Create a bot via @BotFather on Telegram",
+    "config_fields": [
+        {"name": "bot_token", "type": "secret", "required": True},
+        {"name": "chat_id", "type": "string", "required": True},
+    ],
+}
+```
+
+The CLI (`cli/scanner.py`) auto-discovers plugins by walking the `plugins/` directory and collecting all `PLUGIN_META` dicts. Adding a new plugin is just adding a file with `PLUGIN_META` -- it automatically appears in the setup wizard (`opensuperfin setup`) and in `opensuperfin plugin list`.
 
 ---
 
@@ -277,7 +300,7 @@ class OutputAdapter(Protocol):
 
 ### Plugin Dependencies
 
-Each integration only adds dependencies it needs. The core doesn't import `python-telegram-bot` -- only the Telegram plugin does. If you don't use Telegram, you don't install it.
+Each integration only adds dependencies it needs. The Telegram plugin uses `httpx` (already a core dependency) to call the Telegram Bot API directly -- no extra packages needed. Other plugins may add their own dependencies as declared in their `PLUGIN_META`.
 
 ---
 
@@ -387,9 +410,30 @@ When triggered by events, the orchestrator:
 
 The orchestrator depends on `LLMProvider` and `AIAgent` protocols -- it doesn't know which models or agents are active.
 
-### Interface (Human-facing via API)
+### AI Interface (Human-facing via Tool-Calling)
 
-Exposed via the core HTTP API. Integrations (like Telegram) relay messages to this endpoint. Has tool-use access to query data, modify tasks, manage positions, view memories, launch simulations.
+The AI interface (`engine/interface.py`) is the conversational controller for all user interactions. It uses LLM tool-calling (function calling) to handle every user request -- no regex, no keyword matching. This means it works in any language.
+
+The interface exposes 12 tools to the LLM:
+
+| Tool | Purpose |
+|------|---------|
+| `confirm_trade` | Confirm a pending signal |
+| `skip_trade` | Skip a pending signal |
+| `close_position` | Close an existing position |
+| `user_initiated_trade` | Record a trade the user made on their own |
+| `get_portfolio` | Show current portfolio state |
+| `get_price` | Fetch current price for a ticker |
+| `list_tasks` | List scheduled tasks |
+| `create_task` | Create a new scheduled task |
+| `delete_task` | Delete a scheduled task |
+| `get_memories` | Retrieve learning loop memories |
+| `get_signals` | List recent signals |
+| `run_analysis` | Trigger analysis on a ticker or topic |
+
+Integration plugins (like Telegram) are "dumb pipes" -- they receive raw text from the user and forward it to the AI interface. The plugin does not classify messages, parse trades, or understand intent. All intelligence lives in the AI interface via tool-calling.
+
+This is exposed via the core HTTP API at `POST /chat`. Any integration can relay messages to this endpoint.
 
 ### Memories in Context
 
@@ -529,7 +573,7 @@ class PluginRegistry:
 
 ## Dependency Footprint
 
-### Core (5 packages)
+### Core (6 packages)
 
 | Package | Purpose | Size |
 |---------|---------|------|
@@ -538,6 +582,7 @@ class PluginRegistry:
 | `python-dotenv` | .env loading | ~0.1MB |
 | `aiohttp` | Lightweight async HTTP server | ~1.5MB |
 | `httpx` | HTTP client (LLM APIs, data fetching) | ~1MB |
+| `questionary` | Interactive CLI setup wizard | ~0.3MB |
 
 ### Python Stdlib (free)
 
@@ -547,11 +592,49 @@ class PluginRegistry:
 
 | Plugin | Extra Dependency |
 |--------|-----------------|
-| Telegram | `python-telegram-bot` |
+| Telegram | None (`httpx` already installed -- uses Telegram Bot API directly) |
 | Email | None (stdlib `imaplib`/`smtplib`) |
 | Yahoo Finance | `yfinance` or just `httpx` (already installed) |
 | CoinGecko | None (`httpx` already installed) |
 | Custom Scrapers | Whatever the scraper needs |
+
+---
+
+## CLI and Setup Wizard
+
+The `opensuperfin` command (`cli/` directory) provides a unified interface for installation, configuration, and management.
+
+### One-Line Installer
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tedboudros/OpenSuperFin/main/install.sh | bash
+```
+
+The `install.sh` script checks Python 3.11+, clones the repo, creates a virtual environment, installs dependencies, creates an `opensuperfin` shell wrapper in `~/.local/bin/`, and runs the setup wizard automatically.
+
+### CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `opensuperfin setup` | Full interactive setup wizard |
+| `opensuperfin start` | Start the server |
+| `opensuperfin status` | Show system status |
+| `opensuperfin config` | Re-run the configurator |
+| `opensuperfin plugin list` | List all discovered plugins |
+| `opensuperfin plugin <name>` | Configure a specific plugin |
+| `opensuperfin plugin enable/disable <name>` | Toggle plugins on/off |
+
+### CLI Architecture
+
+| File | Purpose |
+|------|---------|
+| `cli/main.py` | argparse CLI entrypoint |
+| `cli/scanner.py` | Plugin discovery (walks `plugins/`, collects `PLUGIN_META`) |
+| `cli/setup.py` | Interactive setup wizard using `questionary` |
+| `cli/config_gen.py` | Generates `config.yaml` + `.env` from wizard choices |
+| `cli/banner.py` | ASCII art banner |
+
+The scanner walks the `plugins/` directory, imports each Python file, and collects the `PLUGIN_META` dict from each module. This means adding a new plugin = adding a file with `PLUGIN_META`. It automatically appears in the wizard and CLI with no registration needed.
 
 ---
 

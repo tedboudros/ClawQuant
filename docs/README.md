@@ -4,7 +4,7 @@
 
 OpenSuperFin ingests macro, political, rates, and market data across any asset class (stocks, crypto, ETFs, commodities, forex), processes it through AI agents, and delivers actionable trade signals to a human trader. The system learns from disagreements between the AI and the human over time.
 
-Runs on minimal hardware. 5 pip dependencies. State is files on disk.
+Runs on minimal hardware. 6 pip dependencies. State is files on disk. One-line installer and interactive CLI.
 
 ---
 
@@ -48,8 +48,10 @@ Runs on minimal hardware. 5 pip dependencies. State is files on disk.
 
 ### Design Principles
 - **Fully abstracted core**: 8 protocols define every extension point. The core defines WHAT, plugins define HOW. Swap any market data source, LLM provider, integration, or risk rule without touching the core.
+- **Self-describing plugins (PLUGIN_META)**: Every plugin file declares a `PLUGIN_META` dict at module level (name, category, dependencies, config fields). The CLI auto-discovers plugins by scanning the `plugins/` directory -- adding a new plugin is just adding a file with `PLUGIN_META`.
 - **File-based state**: Memos are Markdown. Positions are JSON. Logs are JSONL. All inspectable, greppable, `cat`-able.
-- **Minimal dependencies**: 5 core pip packages + Python stdlib
+- **Minimal dependencies**: 6 core pip packages + Python stdlib
+- **CLI-first**: One-line installer (`install.sh`), interactive setup wizard (`opensuperfin setup`), all management via the `opensuperfin` command.
 - **Runs on a potato**: Single async Python process, ~100MB RAM, no Docker
 - **Plugin-based**: Core is a lightweight HTTP server. Everything else is a plugin.
 - **Human-in-the-loop**: AI advises, human trades
@@ -66,4 +68,5 @@ Runs on minimal hardware. 5 pip dependencies. State is files on disk.
 | Storage | Files (JSON, Markdown, JSONL) + SQLite (stdlib) |
 | Validation | Pydantic v2 |
 | Config | YAML + .env |
-| Total core LOC | ~1,000 lines |
+| CLI | questionary (interactive setup wizard) |
+| Total core LOC | ~3,000+ lines |

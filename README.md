@@ -27,9 +27,11 @@ You trade. The system advises.
 ## Design
 
 - **Fully abstracted core**. 8 protocols define every extension point (market data, LLM providers, integrations, agents, risk rules). The core never imports concrete implementations.
-- **5 pip dependencies**. Everything else is Python stdlib.
+- **Self-describing plugins**. Every plugin declares a `PLUGIN_META` dict (name, category, dependencies, config fields). The CLI auto-discovers them -- adding a plugin is just adding a file.
+- **6 pip dependencies**. Everything else is Python stdlib.
 - **File-based state**. Memos are Markdown. Positions are JSON. Logs are JSONL. All human-readable.
 - **SQLite** for indexed queries (market data, memory search). No external database.
+- **CLI-first setup**. One-line install, interactive setup wizard, all commands via `opensuperfin`.
 - **Runs on a potato**. Single async Python process. ~100MB RAM. No Docker, no Redis, no PostgreSQL.
 
 ## Architecture
@@ -55,27 +57,41 @@ See [docs/](docs/) for the full architecture documentation.
 ## Quick Start
 
 ```bash
-# Clone
+# One-line install (checks Python 3.11+, clones repo, creates venv, installs deps, runs setup wizard)
+curl -fsSL https://raw.githubusercontent.com/tedboudros/OpenSuperFin/main/install.sh | bash
+
+# Interactive setup wizard (configure plugins, API keys, integrations)
+opensuperfin setup
+
+# Start the server
+opensuperfin start
+```
+
+Or install manually:
+
+```bash
 git clone https://github.com/tedboudros/OpenSuperFin.git
 cd OpenSuperFin
-
-# Install (5 dependencies)
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
-# Configure
-cp config.example.yaml ~/.opensuperfin/config.yaml
-cp .env.example ~/.opensuperfin/.env
-# Edit both files with your API keys and settings
-
-# Run
-python -m opensuperfin
+opensuperfin setup
 ```
 
 ## Configuration
 
-Edit `~/.opensuperfin/config.yaml` for integrations, risk rules, AI providers, and scheduler settings. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the full reference.
+Run `opensuperfin setup` for the interactive wizard, or `opensuperfin config` to re-run it later. The wizard generates `~/.opensuperfin/config.yaml` and `~/.opensuperfin/.env` from your choices.
 
-Secrets (API keys, tokens) go in `~/.opensuperfin/.env`.
+For manual editing, see [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the full reference.
+
+Other commands:
+
+```bash
+opensuperfin status              # show system status
+opensuperfin plugin list         # list all available plugins
+opensuperfin plugin <name>       # configure a specific plugin
+opensuperfin plugin enable <n>   # enable a plugin
+opensuperfin plugin disable <n>  # disable a plugin
+```
 
 ## Documentation
 

@@ -11,6 +11,34 @@ All state is stored under a configurable home directory (default: `~/.opensuperf
 
 ---
 
+## Setup Wizard
+
+The recommended way to generate your configuration is the interactive setup wizard:
+
+```bash
+opensuperfin setup
+```
+
+The wizard walks you through selecting plugins, entering API keys, and configuring integrations. It generates both `config.yaml` and `.env` automatically under `~/.opensuperfin/`.
+
+To re-run the wizard later (e.g., to add a new integration or change providers):
+
+```bash
+opensuperfin config
+```
+
+You can also configure individual plugins:
+
+```bash
+opensuperfin plugin list          # see all available plugins
+opensuperfin plugin telegram      # configure Telegram specifically
+opensuperfin plugin enable email  # enable the email plugin
+```
+
+Manual editing of `config.yaml` and `.env` is still fully supported for advanced users.
+
+---
+
 ## Full Configuration Reference
 
 ```yaml
@@ -39,22 +67,6 @@ integrations:
       - id: personal
         chat_id: "123456789"
         direction: both             # input + output
-        input_types:
-          - position_confirmation   # "bought NVDA at 130"
-          - position_rejection      # "skip"
-          - user_initiated_trade    # "bought TSLA on my own at 245"
-          - question                # "what's my portfolio?"
-        output_types:
-          - signal
-          - alert
-          - report
-          - simulation_result
-
-      - id: signals_group
-        chat_id: "987654321"
-        direction: output
-        output_types:
-          - signal
 
   email:
     enabled: true
