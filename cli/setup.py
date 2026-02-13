@@ -39,13 +39,13 @@ STYLE = questionary.Style([
 def run_setup(home_dir: Path | None = None) -> None:
     """Run the full interactive setup wizard."""
     print_banner()
-    print("  Welcome to OpenSuperFin setup!\n")
+    print("  Welcome to ClawQuant setup!\n")
 
     # Step 1: Home directory
     if home_dir is None:
-        default_home = str(Path.home() / ".opensuperfin")
+        default_home = str(Path.home() / ".clawquant")
         home_str = questionary.text(
-            "Where should OpenSuperFin store its data?",
+            "Where should ClawQuant store its data?",
             default=default_home,
             style=STYLE,
         ).ask()
@@ -113,8 +113,8 @@ def run_setup(home_dir: Path | None = None) -> None:
     print(f"  Config:   {config_path}")
     print(f"  Secrets:  {env_path}")
     print()
-    print("  OpenSuperFin is ready! Run:")
-    print("    opensuperfin start")
+    print("  ClawQuant is ready! Run:")
+    print("    clawquant start")
     print()
 
 
@@ -125,7 +125,7 @@ def run_plugin_setup(plugin_name: str) -> None:
     plugin = get_plugin(plugin_name)
     if not plugin:
         print(f"  Unknown plugin: {plugin_name}")
-        print(f"  Run 'opensuperfin plugin list' to see available plugins.")
+        print(f"  Run 'clawquant plugin list' to see available plugins.")
         sys.exit(1)
 
     if not plugin.has_config:
@@ -141,7 +141,7 @@ def run_plugin_setup(plugin_name: str) -> None:
         for k, v in values.items():
             display_v = "********" if any(f.key == k and f.type == "secret" for f in plugin.config_fields) else v
             print(f"    {k}: {display_v}")
-        print(f"\n  Run 'opensuperfin config' to apply changes to your configuration.\n")
+        print(f"\n  Run 'clawquant config' to apply changes to your configuration.\n")
 
 
 # ---------------------------------------------------------------------------

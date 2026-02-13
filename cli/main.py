@@ -1,14 +1,14 @@
-"""OpenSuperFin CLI -- the `opensuperfin` command.
+"""ClawQuant CLI -- the `clawquant` command.
 
 Usage:
-    opensuperfin setup              Full interactive setup wizard
-    opensuperfin start              Start the server
-    opensuperfin status             Show system status
-    opensuperfin config             Re-run the configuration wizard
-    opensuperfin plugin list        List all available plugins
-    opensuperfin plugin <name>      Configure a specific plugin
-    opensuperfin plugin enable <n>  Enable a plugin
-    opensuperfin plugin disable <n> Disable a plugin
+    clawquant setup              Full interactive setup wizard
+    clawquant start              Start the server
+    clawquant status             Show system status
+    clawquant config             Re-run the configuration wizard
+    clawquant plugin list        List all available plugins
+    clawquant plugin <name>      Configure a specific plugin
+    clawquant plugin enable <n>  Enable a plugin
+    clawquant plugin disable <n> Disable a plugin
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ from pathlib import Path
 
 
 def get_home_dir() -> Path:
-    """Get the OpenSuperFin home directory."""
-    return Path(os.environ.get("OPENSUPERFIN_HOME", Path.home() / ".opensuperfin")).expanduser()
+    """Get the ClawQuant home directory."""
+    return Path(os.environ.get("CLAWQUANT_HOME", Path.home() / ".clawquant")).expanduser()
 
 
 def cmd_setup(args: argparse.Namespace) -> None:
@@ -33,13 +33,13 @@ def cmd_setup(args: argparse.Namespace) -> None:
 
 
 def cmd_start(args: argparse.Namespace) -> None:
-    """Start the OpenSuperFin server."""
+    """Start the ClawQuant server."""
     from main import run, setup_logging
     setup_logging("INFO")
 
     config_path = get_home_dir() / "config.yaml"
     if not config_path.exists():
-        print("  No configuration found. Run 'opensuperfin setup' first.")
+        print("  No configuration found. Run 'clawquant setup' first.")
         sys.exit(1)
 
     try:
@@ -129,7 +129,7 @@ def _plugin_list() -> None:
 def _plugin_toggle(name: str | None, enable: bool) -> None:
     """Enable or disable a plugin in config.yaml."""
     if not name:
-        print("  Usage: opensuperfin plugin enable <name>")
+        print("  Usage: clawquant plugin enable <name>")
         return
 
     import yaml
@@ -137,7 +137,7 @@ def _plugin_toggle(name: str | None, enable: bool) -> None:
     config_path = home / "config.yaml"
 
     if not config_path.exists():
-        print("  No config file. Run 'opensuperfin setup' first.")
+        print("  No config file. Run 'clawquant setup' first.")
         return
 
     with open(config_path) as f:
@@ -173,16 +173,16 @@ def _plugin_toggle(name: str | None, enable: bool) -> None:
         action = "Enabled" if enable else "Disabled"
         print(f"  {action}: {name}")
     else:
-        print(f"  Plugin '{name}' not found in config. Run 'opensuperfin config' to set it up.")
+        print(f"  Plugin '{name}' not found in config. Run 'clawquant config' to set it up.")
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser."""
     parser = argparse.ArgumentParser(
-        prog="opensuperfin",
-        description="OpenSuperFin -- Lightweight trading advisory system",
+        prog="clawquant",
+        description="ClawQuant -- Lightweight trading advisory system",
     )
-    parser.add_argument("--home", type=str, default=None, help="OpenSuperFin home directory")
+    parser.add_argument("--home", type=str, default=None, help="ClawQuant home directory")
 
     sub = parser.add_subparsers(dest="command")
 
@@ -190,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("setup", help="Run the interactive setup wizard")
 
     # start
-    sub.add_parser("start", help="Start the OpenSuperFin server")
+    sub.add_parser("start", help="Start the ClawQuant server")
 
     # status
     sub.add_parser("status", help="Show system status")

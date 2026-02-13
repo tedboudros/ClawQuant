@@ -74,7 +74,7 @@ class YahooFinanceProvider:
         self._tickers = set(tickers or [])
         self._client = httpx.AsyncClient(
             timeout=30.0,
-            headers={"User-Agent": "OpenSuperFin/0.1"},
+            headers={"User-Agent": "ClawQuant/0.1"},
         )
 
     @property

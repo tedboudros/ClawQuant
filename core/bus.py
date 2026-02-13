@@ -26,7 +26,7 @@ class AsyncIOBus:
     Implements the EventBus protocol.
 
     Usage:
-        bus = AsyncIOBus(events_dir=Path("~/.opensuperfin/events"))
+        bus = AsyncIOBus(events_dir=Path("~/.clawquant/events"))
         bus.subscribe("signal.proposed", my_handler)
         await bus.publish(event)
     """

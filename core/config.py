@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 # Default home directory for all state files
-DEFAULT_HOME = Path.home() / ".opensuperfin"
+DEFAULT_HOME = Path.home() / ".clawquant"
 
 
 def _resolve_env_vars(value: Any) -> Any:
@@ -151,7 +151,7 @@ def load_config(
     4. Create home directory structure if needed
     """
     # Determine paths
-    home = Path(os.environ.get("OPENSUPERFIN_HOME", str(DEFAULT_HOME))).expanduser()
+    home = Path(os.environ.get("CLAWQUANT_HOME", str(DEFAULT_HOME))).expanduser()
 
     if env_path is None:
         env_path = home / ".env"
@@ -181,8 +181,8 @@ def load_config(
     resolved = _resolve_env_vars(raw_config)
 
     # Override home_dir if set via env
-    if "OPENSUPERFIN_HOME" in os.environ:
-        resolved["home_dir"] = os.environ["OPENSUPERFIN_HOME"]
+    if "CLAWQUANT_HOME" in os.environ:
+        resolved["home_dir"] = os.environ["CLAWQUANT_HOME"]
 
     # Validate
     config = AppConfig(**resolved)

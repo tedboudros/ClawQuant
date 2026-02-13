@@ -1,4 +1,4 @@
-"""OpenSuperFin entrypoint -- wires all components together and starts the server.
+"""ClawQuant entrypoint -- wires all components together and starts the server.
 
 Usage:
     python main.py
@@ -36,18 +36,18 @@ def setup_logging(level: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="OpenSuperFin trading advisory system")
+    parser = argparse.ArgumentParser(description="ClawQuant trading advisory system")
     parser.add_argument(
         "--config", "-c",
         type=str,
         default=None,
-        help="Path to config.yaml (default: ~/.opensuperfin/config.yaml)",
+        help="Path to config.yaml (default: ~/.clawquant/config.yaml)",
     )
     parser.add_argument(
         "--env",
         type=str,
         default=None,
-        help="Path to .env file (default: ~/.opensuperfin/.env)",
+        help="Path to .env file (default: ~/.clawquant/.env)",
     )
     return parser.parse_args()
 
@@ -60,7 +60,7 @@ def _days_from_period(period: str) -> int:
 
 async def _load_plugins(config, bus, store, registry, ai_interface: AIInterface) -> None:
     """Load and register all plugins from config."""
-    logger = logging.getLogger("opensuperfin.plugins")
+    logger = logging.getLogger("clawquant.plugins")
 
     # 1. Load AI providers
     for provider_name, provider_config in config.ai.providers.items():
@@ -179,6 +179,7 @@ async def _load_plugins(config, bus, store, registry, ai_interface: AIInterface)
     # 5. Load task handlers
     try:
         from plugins.task_handlers.comparison import ComparisonHandler
+        from plugins.task_handlers.notifications import NotificationsHandler
 
         handler = ComparisonHandler(
             store=store,
@@ -188,6 +189,10 @@ async def _load_plugins(config, bus, store, registry, ai_interface: AIInterface)
         )
         registry.register("task_handler", handler)
         logger.info("Loaded task handler: %s", handler.name)
+
+        notifications_handler = NotificationsHandler(registry=registry)
+        registry.register("task_handler", notifications_handler)
+        logger.info("Loaded task handler: %s", notifications_handler.name)
     except Exception as e:
         logger.error("Failed to load task handlers: %s", e)
 
@@ -233,7 +238,7 @@ async def run(config_path: str | None = None, env_path: str | None = None) -> No
     """Initialize all components and start the server."""
     # Load configuration
     config = load_config(config_path=config_path, env_path=env_path)
-    logger = logging.getLogger("opensuperfin")
+    logger = logging.getLogger("clawquant")
     logger.info("Configuration loaded from %s", config.home_path)
 
     # Initialize core infrastructure
@@ -284,7 +289,7 @@ async def run(config_path: str | None = None, env_path: str | None = None) -> No
     await site.start()
 
     logger.info(
-        "OpenSuperFin running at http://%s:%d",
+        "ClawQuant running at http://%s:%d",
         config.server.host,
         config.server.port,
     )

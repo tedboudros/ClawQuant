@@ -1,8 +1,8 @@
-# OpenSuperFin Documentation
+# ClawQuant Documentation
 
 **A lightweight, event-driven macro/LLM trading advisory system.**
 
-OpenSuperFin ingests macro, political, rates, and market data across any asset class (stocks, crypto, ETFs, commodities, forex), processes it through AI agents, and delivers actionable trade signals to a human trader. The system learns from disagreements between the AI and the human over time.
+ClawQuant ingests macro, political, rates, and market data across any asset class (stocks, crypto, ETFs, commodities, forex), processes it through AI agents, and delivers actionable trade signals to a human trader. The system learns from disagreements between the AI and the human over time.
 
 Runs on minimal hardware. 6 pip dependencies. State is files on disk. One-line installer and interactive CLI.
 
@@ -51,7 +51,7 @@ Runs on minimal hardware. 6 pip dependencies. State is files on disk. One-line i
 - **Self-describing plugins (PLUGIN_META)**: Every plugin file declares a `PLUGIN_META` dict at module level (name, category, dependencies, config fields). The CLI auto-discovers plugins by scanning the `plugins/` directory -- adding a new plugin is just adding a file with `PLUGIN_META`.
 - **File-based state**: Memos are Markdown. Positions are JSON. Logs are JSONL. All inspectable, greppable, `cat`-able.
 - **Minimal dependencies**: 6 core pip packages + Python stdlib
-- **CLI-first**: One-line installer (`install.sh`), interactive setup wizard (`opensuperfin setup`), all management via the `opensuperfin` command.
+- **CLI-first**: One-line installer (`install.sh`), interactive setup wizard (`clawquant setup`), all management via the `clawquant` command.
 - **Runs on a potato**: Single async Python process, ~100MB RAM, no Docker
 - **Plugin-based**: Core is a lightweight HTTP server. Everything else is a plugin.
 - **Human-in-the-loop**: AI advises, human trades

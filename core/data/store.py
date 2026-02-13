@@ -26,7 +26,7 @@ T = TypeVar("T", bound=BaseModel)
 class Store:
     """Unified storage layer for files + SQLite.
 
-    All paths are relative to the home directory (~/.opensuperfin/).
+    All paths are relative to the home directory (~/.clawquant/).
     """
 
     def __init__(self, home: Path) -> None:

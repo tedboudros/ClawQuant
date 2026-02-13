@@ -79,8 +79,8 @@ class OpenRouterProvider:
         base_url: str = _DEFAULT_URL,
         max_tokens: int = 4096,
         temperature: float = 0.3,
-        site_name: str = "OpenSuperFin",
-        site_url: str = "https://github.com/tedboudros/OpenSuperFin",
+        site_name: str = "ClawQuant",
+        site_url: str = "https://github.com/tedboudros/ClawQuant",
     ) -> None:
         self._model = model
         self._max_tokens = max_tokens

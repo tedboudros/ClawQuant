@@ -15,7 +15,7 @@ Key decisions, alternatives considered, and reasoning.
 
 **Rationale**:
 - You can `cat` a position, `grep` the audit log, open a memo in any editor
-- State is trivially backed up (`cp -r ~/.opensuperfin/ backup/`)
+- State is trivially backed up (`cp -r ~/.clawquant/ backup/`)
 - State is trivially inspectable and debuggable
 - SQLite handles the one thing files are bad at: indexed time-series queries for market data and fast tag-based memory retrieval
 - SQLite is Python stdlib -- zero install, zero RAM overhead, single file on disk
@@ -264,10 +264,10 @@ Key decisions, alternatives considered, and reasoning.
 
 ## Directory Structure
 
-Code lives at the repo root (not inside an `opensuperfin/` package). Imports are `from core.models import ...`, not `from opensuperfin.core.models import ...`.
+Code lives at the repo root (not inside an `clawquant/` package). Imports are `from core.models import ...`, not `from clawquant.core.models import ...`.
 
 ```
-OpenSuperFin/
+ClawQuant/
     install.sh                     # One-line installer script
 
     core/                          # DEFINES WHAT (protocols + models)

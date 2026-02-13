@@ -1,8 +1,8 @@
-# OpenSuperFin Architecture
+# ClawQuant Architecture
 
 ## Design Philosophy
 
-OpenSuperFin is an event-driven macro/LLM trading advisory system designed to run on minimal hardware. It advises a human trader -- it does **not** execute trades automatically.
+ClawQuant is an event-driven macro/LLM trading advisory system designed to run on minimal hardware. It advises a human trader -- it does **not** execute trades automatically.
 
 ### Guiding Principles
 
@@ -124,7 +124,7 @@ PLUGIN_META = {
 }
 ```
 
-The CLI (`cli/scanner.py`) auto-discovers plugins by walking the `plugins/` directory and collecting all `PLUGIN_META` dicts. Adding a new plugin is just adding a file with `PLUGIN_META` -- it automatically appears in the setup wizard (`opensuperfin setup`) and in `opensuperfin plugin list`.
+The CLI (`cli/scanner.py`) auto-discovers plugins by walking the `plugins/` directory and collecting all `PLUGIN_META` dicts. Adding a new plugin is just adding a file with `PLUGIN_META` -- it automatically appears in the setup wizard (`clawquant setup`) and in `clawquant plugin list`.
 
 ---
 
@@ -307,7 +307,7 @@ Each integration only adds dependencies it needs. The Telegram plugin uses `http
 
 ## Component 4: Data Layer (Files + SQLite)
 
-All persistent state lives under `~/.opensuperfin/` (configurable).
+All persistent state lives under `~/.clawquant/` (configurable).
 
 ### Files (Human-Readable)
 
@@ -339,7 +339,7 @@ All market data queries respect `TimeContext`. In production, it's "now." In sim
 
 ## Component 5: Scheduler
 
-A simple `asyncio` loop that reads task files from `~/.opensuperfin/tasks/`. No dependencies.
+A simple `asyncio` loop that reads task files from `~/.clawquant/tasks/`. No dependencies.
 
 ### How It Works
 
@@ -532,7 +532,7 @@ class PluginRegistry:
 ## State Directory Structure
 
 ```
-~/.opensuperfin/                     # configurable via OPENSUPERFIN_HOME
+~/.clawquant/                     # configurable via CLAWQUANT_HOME
     config.yaml                      # main configuration
     .env                             # secrets (gitignored)
     db.sqlite                        # SQLite: market data, indexes
@@ -603,27 +603,27 @@ class PluginRegistry:
 
 ## CLI and Setup Wizard
 
-The `opensuperfin` command (`cli/` directory) provides a unified interface for installation, configuration, and management.
+The `clawquant` command (`cli/` directory) provides a unified interface for installation, configuration, and management.
 
 ### One-Line Installer
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tedboudros/OpenSuperFin/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tedboudros/ClawQuant/main/install.sh | bash
 ```
 
-The `install.sh` script checks Python 3.11+, clones the repo, creates a virtual environment, installs dependencies, creates an `opensuperfin` shell wrapper in `~/.local/bin/`, and runs the setup wizard automatically.
+The `install.sh` script checks Python 3.11+, clones the repo, creates a virtual environment, installs dependencies, creates an `clawquant` shell wrapper in `~/.local/bin/`, and runs the setup wizard automatically.
 
 ### CLI Commands
 
 | Command | Description |
 |---------|-------------|
-| `opensuperfin setup` | Full interactive setup wizard |
-| `opensuperfin start` | Start the server |
-| `opensuperfin status` | Show system status |
-| `opensuperfin config` | Re-run the configurator |
-| `opensuperfin plugin list` | List all discovered plugins |
-| `opensuperfin plugin <name>` | Configure a specific plugin |
-| `opensuperfin plugin enable/disable <name>` | Toggle plugins on/off |
+| `clawquant setup` | Full interactive setup wizard |
+| `clawquant start` | Start the server |
+| `clawquant status` | Show system status |
+| `clawquant config` | Re-run the configurator |
+| `clawquant plugin list` | List all discovered plugins |
+| `clawquant plugin <name>` | Configure a specific plugin |
+| `clawquant plugin enable/disable <name>` | Toggle plugins on/off |
 
 ### CLI Architecture
 
@@ -655,7 +655,7 @@ EventBus (protocol) → AuditLog (JSONL)
 │  files)   │  protocols)│  protocol│           │
 └───────────┴────────────┴──────────┴───────────┘
         ↕
-Files + SQLite (~/.opensuperfin/)
+Files + SQLite (~/.clawquant/)
 ```
 
 No component directly imports another. They communicate through the event bus (protocol) and read/write shared state. Every external interaction goes through a protocol. Every protocol has a default implementation that can be swapped.

@@ -1,6 +1,6 @@
 # Event Flows
 
-Core event flows through the system. Every flow is a chain of events connected by a `correlation_id`, persisted as JSONL in `~/.opensuperfin/events/`.
+Core event flows through the system. Every flow is a chain of events connected by a `correlation_id`, persisted as JSONL in `~/.clawquant/events/`.
 
 ---
 

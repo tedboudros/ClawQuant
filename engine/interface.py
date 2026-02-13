@@ -29,7 +29,7 @@ from scheduler.runner import Scheduler
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are the AI assistant for OpenSuperFin, a trading advisory system.
+SYSTEM_PROMPT = """You are the AI assistant for ClawQuant, a trading advisory system.
 
 You help the user manage their trading activity. You can:
 - Record trades they've made (confirm_trade, close_position, user_initiated_trade)

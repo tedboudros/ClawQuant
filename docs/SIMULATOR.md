@@ -112,7 +112,7 @@ Calculate performance metrics from the paper portfolio using pure Python math:
 
 ### 5. Output
 
-Results saved to `~/.opensuperfin/simulations/{name}/`:
+Results saved to `~/.clawquant/simulations/{name}/`:
 ```
 simulations/
     claude_macro_2024/

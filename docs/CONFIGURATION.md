@@ -1,13 +1,13 @@
 # Configuration
 
-OpenSuperFin uses two configuration files:
+ClawQuant uses two configuration files:
 
 - `config.yaml` -- All structured settings
 - `.env` -- Secrets only (API keys, passwords, tokens)
 
 Secrets are referenced in `config.yaml` via `${ENV_VAR}` syntax and resolved at startup from `.env` or environment variables.
 
-All state is stored under a configurable home directory (default: `~/.opensuperfin/`).
+All state is stored under a configurable home directory (default: `~/.clawquant/`).
 
 ---
 
@@ -16,23 +16,23 @@ All state is stored under a configurable home directory (default: `~/.opensuperf
 The recommended way to generate your configuration is the interactive setup wizard:
 
 ```bash
-opensuperfin setup
+clawquant setup
 ```
 
-The wizard walks you through selecting plugins, entering API keys, and configuring integrations. It generates both `config.yaml` and `.env` automatically under `~/.opensuperfin/`.
+The wizard walks you through selecting plugins, entering API keys, and configuring integrations. It generates both `config.yaml` and `.env` automatically under `~/.clawquant/`.
 
 To re-run the wizard later (e.g., to add a new integration or change providers):
 
 ```bash
-opensuperfin config
+clawquant config
 ```
 
 You can also configure individual plugins:
 
 ```bash
-opensuperfin plugin list          # see all available plugins
-opensuperfin plugin telegram      # configure Telegram specifically
-opensuperfin plugin enable email  # enable the email plugin
+clawquant plugin list          # see all available plugins
+clawquant plugin telegram      # configure Telegram specifically
+clawquant plugin enable email  # enable the email plugin
 ```
 
 Manual editing of `config.yaml` and `.env` is still fully supported for advanced users.
@@ -48,7 +48,7 @@ Manual editing of `config.yaml` and `.env` is still fully supported for advanced
 # GENERAL
 # ─────────────────────────────────────────────────────────────────────
 
-home_dir: ~/.opensuperfin         # where all state files live
+home_dir: ~/.clawquant         # where all state files live
 server:
   host: 127.0.0.1                 # bind address
   port: 8321                      # port for the core HTTP server

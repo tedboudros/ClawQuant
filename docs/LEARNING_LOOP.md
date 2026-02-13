@@ -10,7 +10,7 @@ The system maintains two parallel portfolios and learns from their divergences. 
 
 Every approved signal is **always** assumed executed. The AI's pure, unbiased track record.
 
-Stored as JSON files in `~/.opensuperfin/positions/ai/`.
+Stored as JSON files in `~/.clawquant/positions/ai/`.
 
 ### Human Portfolio (Actual)
 
@@ -24,7 +24,7 @@ Tracks what the user **actually** did. Updated via:
 | Broker read-only sync | Highest | Optional integration (future) |
 | Assumed execution | Low | No response after timeout (default: 4h) |
 
-Stored as JSON files in `~/.opensuperfin/positions/human/`.
+Stored as JSON files in `~/.clawquant/positions/human/`.
 
 ### Why Two?
 
