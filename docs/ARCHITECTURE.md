@@ -137,6 +137,8 @@ Current plugin tools include:
 - `open_browser` / `close_browser` / `list_saved_logins` / `run_selenium_code` / `get_browser_screenshot` / `get_page_code` (optional selenium browser plugin)
 
 For selenium login flows, `run_selenium_code` provides helper `get_saved_login("<profile_id>")`.
+`get_browser_screenshot` returns a base64 image payload in tool output (data URL form when complete; preview + truncated flag when cut by `max_base64_chars`).
+When a complete `base64_data_url` is present, the AI interface feeds it back into the next model turn as an image content part.
 
 ### Tool-loop behavior
 

@@ -6,6 +6,7 @@ No SDK dependency. Direct HTTP calls to the Anthropic messages API.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -92,16 +93,84 @@ class AnthropicProvider:
     def name(self) -> str:
         return "anthropic"
 
+    @staticmethod
+    def _data_url_to_anthropic_image(data_url: str) -> dict[str, Any] | None:
+        """Convert data:image/...;base64,... URL to Anthropic image block."""
+        value = str(data_url or "").strip()
+        if not value.startswith("data:image/"):
+            return None
+        match = re.match(
+            r"^data:(image/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$",
+            value,
+        )
+        if not match:
+            return None
+        media_type, data = match.group(1), match.group(2)
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": data,
+            },
+        }
+
+    def _normalize_content_for_anthropic(self, content: Any) -> Any:
+        """Convert OpenAI-style multimodal parts into Anthropic content blocks."""
+        if isinstance(content, str):
+            return content
+
+        if isinstance(content, list):
+            blocks: list[dict[str, Any]] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                ptype = str(part.get("type", "")).strip().lower()
+                if ptype in {"text", "input_text"}:
+                    text = str(part.get("text", "")).strip()
+                    if text:
+                        blocks.append({"type": "text", "text": text})
+                    continue
+                if ptype in {"image_url", "input_image"}:
+                    image_url = part.get("image_url")
+                    if isinstance(image_url, dict):
+                        url = image_url.get("url")
+                    else:
+                        url = image_url
+                    block = self._data_url_to_anthropic_image(str(url or ""))
+                    if block is not None:
+                        blocks.append(block)
+                    continue
+            if blocks:
+                return blocks
+
+        return str(content)
+
+    def _split_messages(
+        self,
+        messages: list[dict],
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Split system message and normalize user/assistant message contents."""
+        system_msg = ""
+        user_messages: list[dict[str, Any]] = []
+        for msg in messages:
+            role = str(msg.get("role", "user"))
+            content = msg.get("content", "")
+            if role == "system":
+                if isinstance(content, str):
+                    system_msg = content
+                else:
+                    system_msg = str(content)
+                continue
+            user_messages.append({
+                "role": role,
+                "content": self._normalize_content_for_anthropic(content),
+            })
+        return system_msg, user_messages
+
     async def complete(self, messages: list[dict], **kwargs: Any) -> str:
         """Send messages and return the text response."""
-        # Convert from OpenAI-style messages to Anthropic format
-        system_msg = ""
-        user_messages = []
-        for msg in messages:
-            if msg["role"] == "system":
-                system_msg = msg["content"]
-            else:
-                user_messages.append(msg)
+        system_msg, user_messages = self._split_messages(messages)
 
         body: dict[str, Any] = {
             "model": kwargs.get("model", self._model),
@@ -138,13 +207,7 @@ class AnthropicProvider:
                 "input_schema": func.get("parameters", {}),
             })
 
-        system_msg = ""
-        user_messages = []
-        for msg in messages:
-            if msg["role"] == "system":
-                system_msg = msg["content"]
-            else:
-                user_messages.append(msg)
+        system_msg, user_messages = self._split_messages(messages)
 
         body: dict[str, Any] = {
             "model": kwargs.get("model", self._model),

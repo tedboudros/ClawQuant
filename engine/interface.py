@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from inspect import isawaitable
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -61,6 +62,9 @@ IMPORTANT RULES:
   - First call `list_saved_logins` to discover available credential profile IDs.
   - Choose the appropriate profile ID, then use `run_selenium_code`.
   - Inside `run_selenium_code`, use helper `get_saved_login("<profile_id>")` to retrieve username/password during execution.
+  - For browser state validation and blockers (cookie banners, modals, overlays), call `get_browser_screenshot` and `get_page_code`.
+  - `get_browser_screenshot` returns a base64 image payload in tool output; use it to reason about what is visibly blocking interaction.
+  - If screenshot payload is truncated, call `get_browser_screenshot` again with a higher `max_base64_chars`.
   - Do not print, echo, summarize, or restate credentials in any response.
   - Do not store credentials in tasks, notes, or message history.
   - If no matching login profile exists, ask the user to configure selenium saved logins via plugin setup.
@@ -76,6 +80,7 @@ Execution rules:
 - Do not create/modify/delete tasks unless the prompt explicitly asks you to manage schedules.
 - For news/research requests, call relevant tools before saying data is unavailable.
 - For selenium login automation, use saved-login workflow (`list_saved_logins`, then `get_saved_login` inside run_selenium_code) and never echo credentials.
+- For selenium visual blockers/interstitials, use `get_browser_screenshot` (base64 payload) plus `get_page_code` to decide next interaction steps.
 - Respond with only the current run update for the user."""
 
 FIRST_CHAT_ONBOARDING_DIRECTIVE = """[INTERNAL ONBOARDING DIRECTIVE]
@@ -170,14 +175,14 @@ class AIInterface:
         self,
         llm: LLMProvider,
         system_prompt: str,
-        history: list[dict[str, str]],
+        history: list[dict[str, Any]],
         source: str,
         channel_id: str,
         max_rounds: int = 25,
     ) -> str:
         """Run LLM tool-calling until completion, then return final user response."""
         available_tools = TOOLS + self._collect_plugin_tools()
-        messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}] + list(history)
+        messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}] + list(history)
         last_tool_summary = ""
 
         for _ in range(max_rounds):
@@ -204,12 +209,20 @@ class AIInterface:
                 messages.append({"role": "assistant", "content": result.text})
 
             tool_results: list[str] = []
+            multimodal_followups: list[dict[str, Any]] = []
             for tc in result.tool_calls:
                 func = tc.get("function", tc)
                 tool_name = str(func.get("name", ""))
                 args = self._parse_tool_args(func.get("arguments", {}))
-                tool_result = await self._execute_tool(tool_name, args, source, channel_id)
-                tool_results.append(f"[{tool_name}]: {tool_result}")
+                raw_tool_result = str(await self._execute_tool(tool_name, args, source, channel_id))
+                summary_tool_result = self._summarize_tool_result_for_text(tool_name, raw_tool_result)
+                tool_results.append(f"[{tool_name}]: {summary_tool_result}")
+                multimodal_followups.extend(
+                    self._build_tool_result_followup_messages(
+                        tool_name=tool_name,
+                        tool_result=raw_tool_result,
+                    )
+                )
 
             last_tool_summary = "\n".join(tool_results) if tool_results else "No tool output."
             messages.append({
@@ -220,6 +233,7 @@ class AIInterface:
                     "Otherwise, respond to the user with the completed outcome."
                 ),
             })
+            messages.extend(multimodal_followups)
 
         max_rounds_notice = (
             "[INTERNAL SYSTEM ERROR] Max tool call rounds reached, "
@@ -373,6 +387,67 @@ class AIInterface:
         except Exception as e:
             logger.exception("Tool %s failed", name)
             return f"Error executing {name}: {e}"
+
+    @staticmethod
+    def _extract_base64_data_url(tool_result: str) -> str | None:
+        match = re.search(
+            r"base64_data_url:\s*(data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+)",
+            tool_result,
+        )
+        if not match:
+            return None
+        return match.group(1).strip()
+
+    @staticmethod
+    def _summarize_tool_result_for_text(tool_name: str, tool_result: str) -> str:
+        """Remove oversized payload lines from textual tool summaries."""
+        if tool_name != "get_browser_screenshot":
+            return tool_result
+        lines = []
+        for line in tool_result.splitlines():
+            lowered = line.strip().lower()
+            if lowered.startswith("base64_data_url:"):
+                lines.append("base64_data_url: [omitted from text summary; attached as image content]")
+                continue
+            if lowered.startswith("base64_preview:"):
+                lines.append("base64_preview: [omitted from text summary]")
+                continue
+            lines.append(line)
+        return "\n".join(lines)
+
+    def _build_tool_result_followup_messages(
+        self,
+        tool_name: str,
+        tool_result: str,
+    ) -> list[dict[str, Any]]:
+        """Build extra multimodal follow-up messages from tool output when useful."""
+        if tool_name != "get_browser_screenshot":
+            return []
+
+        data_url = self._extract_base64_data_url(tool_result)
+        if not data_url:
+            return []
+
+        return [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Tool image context from get_browser_screenshot. "
+                        "Use this screenshot to reason about visible banners/modals/overlays "
+                        "and choose next browser actions."
+                    ),
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": data_url,
+                        "detail": "auto",
+                    },
+                },
+            ],
+        }]
 
     def _iter_plugins(self) -> list[Any]:
         """Return registered plugin instances across protocol registries."""

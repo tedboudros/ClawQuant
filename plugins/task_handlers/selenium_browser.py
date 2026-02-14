@@ -167,6 +167,38 @@ def _dedupe_links(values: list[tuple[str, str]], max_items: int) -> list[tuple[s
     return out
 
 
+def _parse_bool_arg(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _parse_int_arg(
+    value: Any,
+    default: int,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    try:
+        out = int(value)
+    except Exception:
+        out = default
+    if minimum is not None:
+        out = max(minimum, out)
+    if maximum is not None:
+        out = min(maximum, out)
+    return out
+
+
 class SeleniumBrowserHandler:
     """Tool-hosting task handler for Selenium browser automation."""
 
@@ -271,17 +303,25 @@ class SeleniumBrowserHandler:
                 "type": "function",
                 "function": {
                     "name": "get_browser_screenshot",
-                    "description": "Capture current browser viewport screenshot to file.",
+                    "description": (
+                        "Capture current browser viewport screenshot. "
+                        "Returns saved file path and base64 image payload (data URL) for model context."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "include_base64": {
                                 "type": "boolean",
-                                "description": "Include a truncated base64 payload preview.",
+                                "default": True,
+                                "description": "Include base64 image payload in output (default: true).",
                             },
                             "max_base64_chars": {
                                 "type": "integer",
-                                "description": "Max returned base64 characters when include_base64=true (default 4000).",
+                                "default": 500000,
+                                "description": (
+                                    "Max returned base64 characters when include_base64=true "
+                                    "(default 500000, increase if more image detail is needed)."
+                                ),
                             },
                         },
                     },
@@ -562,8 +602,13 @@ class SeleniumBrowserHandler:
             if self._driver is None:
                 return "No active browser session. Use open_browser first."
 
-            include_base64 = bool(args.get("include_base64", False))
-            max_b64 = int(args.get("max_base64_chars", 4000))
+            include_base64 = _parse_bool_arg(args.get("include_base64"), True)
+            max_b64 = _parse_int_arg(
+                args.get("max_base64_chars"),
+                default=500000,
+                minimum=1000,
+                maximum=2000000,
+            )
 
             try:
                 png_bytes = self._driver.get_screenshot_as_png()
@@ -580,10 +625,22 @@ class SeleniumBrowserHandler:
                 f"Bytes: {len(png_bytes)}",
             ]
             if include_base64:
-                encoded = base64.b64encode(png_bytes).decode("ascii")
-                if len(encoded) > max_b64:
-                    encoded = encoded[:max_b64] + "...(truncated)"
-                lines.append(f"base64: {encoded}")
+                encoded_full = base64.b64encode(png_bytes).decode("ascii")
+                full_len = len(encoded_full)
+                encoded = encoded_full
+                truncated = False
+                if full_len > max_b64:
+                    encoded = encoded_full[:max_b64]
+                    truncated = True
+                lines.append(f"base64_chars_total: {full_len}")
+                if truncated:
+                    lines.append(f"base64_chars_returned: {len(encoded)} (truncated)")
+                    lines.append("base64_truncated: true")
+                    lines.append("base64_preview: " + encoded + "...(truncated)")
+                    lines.append("base64_note: Increase max_base64_chars to include full image payload.")
+                else:
+                    lines.append("base64_truncated: false")
+                    lines.append(f"base64_data_url: data:image/png;base64,{encoded}")
             return "\n".join(lines)
 
     async def _tool_page_code(self, args: dict) -> str:
