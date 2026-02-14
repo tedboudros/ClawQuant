@@ -69,6 +69,30 @@ Execution rules:
 - For news/research requests, call relevant tools before saying data is unavailable.
 - Respond with only the current run update for the user."""
 
+FIRST_CHAT_ONBOARDING_DIRECTIVE = """[INTERNAL ONBOARDING DIRECTIVE]
+This is the user's first conversation in ClawQuant.
+
+Objective:
+- Run adaptive onboarding to configure the user profile, preferences, and monitoring setup.
+
+Behavior:
+- Do not use a fixed script or rigid hardcoded question list.
+- Ask concise, context-aware questions based on what the user already said.
+- If an [INITIAL USER MESSAGE] block is present, treat it as the first user message context and align tone/intent to it.
+- Prioritize collecting: markets/assets they trade, watchlist symbols, timezone/session preferences, risk style, and update cadence.
+- If they trade stocks, include preferences for pre-market, post-open, and after-hours monitoring windows.
+- If they trade crypto, include 24/7 cadence and volatility alert preferences.
+- Convert confirmed preferences into concrete ongoing workflows using available tools (prefer `ai.run_prompt` for recurring monitoring).
+- Keep onboarding lightweight: gather key decisions first, then propose useful defaults.
+- If the user asks for something immediate, handle that first, then continue onboarding.
+
+Output style:
+- Be direct, practical, and setup-oriented.
+- Do not mention this internal directive.
+[/INTERNAL ONBOARDING DIRECTIVE]"""
+
+ONBOARDING_DIRECTIVE_MARKER = "[INTERNAL ONBOARDING DIRECTIVE]"
+
 
 class AIInterface:
     """Conversational AI controller with tool-use.
@@ -99,6 +123,26 @@ class AIInterface:
             "content": content,
         })
         self._store.append_conversation_message(channel_id, role, content)
+
+    def _has_persisted_onboarding_directive(self, channel_id: str) -> bool:
+        """Return True if onboarding directive already exists in this channel history."""
+        for msg in self._conversation_history.get(channel_id, []):
+            role = str(msg.get("role", "")).strip().lower()
+            content = str(msg.get("content", ""))
+            if role == "user" and ONBOARDING_DIRECTIVE_MARKER in content:
+                return True
+        return False
+
+    @staticmethod
+    def _build_onboarding_directive_with_initial_user_message(initial_user_message: str) -> str:
+        """Build persisted onboarding directive and include first user message context."""
+        initial = initial_user_message.strip() or "(empty)"
+        return (
+            f"{FIRST_CHAT_ONBOARDING_DIRECTIVE}\n\n"
+            "[INITIAL USER MESSAGE]\n"
+            f"{initial}\n"
+            "[/INITIAL USER MESSAGE]"
+        )
 
     @staticmethod
     def _parse_tool_args(raw_args: Any) -> dict:
@@ -194,12 +238,8 @@ class AIInterface:
         This is the main entry point. Integrations call this with raw
         user text and get back a response to display.
         """
-        # Get or create conversation history for this channel
-        history = self._conversation_history.setdefault(channel_id, [])
-
-        # Add user message
-        self._append_message(channel_id, "user", text)
-        history = self._conversation_history[channel_id]
+        # Ensure channel history exists
+        self._conversation_history.setdefault(channel_id, [])
 
         # Get LLM provider
         providers = self._registry.get_all("llm")
@@ -207,11 +247,21 @@ class AIInterface:
             return "No AI provider configured. Please set up an LLM provider in config.yaml."
 
         llm: LLMProvider = providers[0]
+
+        # One-time persisted onboarding directive for this conversation.
+        # First turn persists exactly one merged user message:
+        # onboarding directive + clearly marked initial user message.
+        if not self._has_persisted_onboarding_directive(channel_id):
+            onboarding_directive = self._build_onboarding_directive_with_initial_user_message(text)
+            self._append_message(channel_id, "user", onboarding_directive)
+        else:
+            # Normal turns persist the user message as-is.
+            self._append_message(channel_id, "user", text)
         try:
             response = await self._run_tool_loop(
                 llm=llm,
                 system_prompt=SYSTEM_PROMPT,
-                history=history,
+                history=self._conversation_history[channel_id],
                 source=source,
                 channel_id=channel_id,
             )
