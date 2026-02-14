@@ -1,343 +1,196 @@
 # Configuration
 
-ClawQuant uses two configuration files:
+ClawQuant uses:
+- `config.yaml` for structured config
+- `.env` for secrets
 
-- `config.yaml` -- All structured settings
-- `.env` -- Secrets only (API keys, passwords, tokens)
-
-Secrets are referenced in `config.yaml` via `${ENV_VAR}` syntax and resolved at startup from `.env` or environment variables.
-
-All state is stored under a configurable home directory (default: `~/.clawquant/`).
+Default home: `~/.clawquant/` (override with `CLAWQUANT_HOME`).
 
 ---
 
-## Setup Wizard
-
-The recommended way to generate your configuration is the interactive setup wizard:
+## Setup Workflow
 
 ```bash
 clawquant setup
 ```
 
-The wizard walks you through selecting plugins, entering API keys, and configuring integrations. It generates both `config.yaml` and `.env` automatically under `~/.clawquant/`.
+What setup does today:
+- Discovers plugins from `PLUGIN_META`
+- Prompts for config fields
+- Lets you skip sections if required fields already exist
+- Writes `config.yaml` and `.env`
+- Installs plugin-specific pip deps when required
 
-To re-run the wizard later (e.g., to add a new integration or change providers):
+Re-run full setup:
 
 ```bash
 clawquant config
 ```
 
-You can also configure individual plugins:
+Enable a plugin later:
 
 ```bash
-clawquant plugin list          # see all available plugins
-clawquant plugin telegram      # configure Telegram specifically
-clawquant plugin enable email  # enable the email plugin
+clawquant plugin enable <plugin_name>
 ```
 
-Manual editing of `config.yaml` and `.env` is still fully supported for advanced users.
+If plugin config is missing, `plugin enable` runs that plugin's setup flow and persists values.
 
 ---
 
-## Full Configuration Reference
+## Current Runtime-Supported Plugins
+
+### Integrations
+- `telegram`
+- `discord`
+
+### Market Data
+- `yahoo_finance`
+
+### AI Providers
+- `openai`
+- `anthropic`
+- `openrouter`
+
+### Task Handlers (loaded by runtime)
+- `ai.run_prompt`
+- `news.briefing`
+- `notifications.send`
+- `comparison.weekly`
+- `web.search` (tool-oriented handler; scheduled run is `no_action`)
+
+---
+
+## Current `config.yaml` Example
 
 ```yaml
-# config.yaml
+home_dir: ~/.clawquant
 
-# ─────────────────────────────────────────────────────────────────────
-# GENERAL
-# ─────────────────────────────────────────────────────────────────────
-
-home_dir: ~/.clawquant         # where all state files live
 server:
-  host: 127.0.0.1                 # bind address
-  port: 8321                      # port for the core HTTP server
-
-
-# ─────────────────────────────────────────────────────────────────────
-# INTEGRATIONS (plugins)
-# ─────────────────────────────────────────────────────────────────────
+  host: 127.0.0.1
+  port: 8321
 
 integrations:
-
   telegram:
     enabled: true
     bot_token: ${TELEGRAM_BOT_TOKEN}
     channels:
       - id: personal
         chat_id: "123456789"
-        direction: both             # input + output
+        direction: both  # both | input | output
 
-  email:
-    enabled: true
-    imap:
-      host: imap.gmail.com
-      port: 993
-      username: ${EMAIL_USER}
-      password: ${EMAIL_APP_PASSWORD}
-      check_interval: 60s
-    smtp:
-      host: smtp.gmail.com
-      port: 587
-      username: ${EMAIL_USER}
-      password: ${EMAIL_APP_PASSWORD}
-    watch_rules:
-      - from: "investor.friend@email.com"
-        label: trusted_investor
-        priority: high
-      - from: "newsletter@macro-research.com"
-        label: research
-        priority: medium
-      - subject_contains: "URGENT"
-        label: urgent
-        priority: high
-
-  webhook:
+  discord:
     enabled: false
-    listen_port: 8080
-    endpoints:
-      - path: /webhooks/news
-        label: news_feed
-        priority: medium
-        auth_token: ${WEBHOOK_AUTH_TOKEN}
-
-  custom:
-    defense_scraper:
-      enabled: true
-      direction: input
-      script: ./scrapers/defense_contracts.py
-      schedule: "0 9 * * 1-5"
-
-
-# ─────────────────────────────────────────────────────────────────────
-# MARKET DATA PROVIDERS (MarketDataProvider protocol)
-# ─────────────────────────────────────────────────────────────────────
-# Each provider implements the MarketDataProvider protocol.
-# Multiple providers can be active simultaneously.
-# Tickers are routed to the provider that supports them.
+    bot_token: ${DISCORD_BOT_TOKEN}
+    poll_interval_seconds: 3
+    channels:
+      - id: personal
+        chat_id: "123456789012345678"  # Discord channel ID
+        direction: both
 
 market_data:
-  poll_interval: 5m               # default polling interval
-  history_depth: 2y               # how much history to load on startup
-
+  poll_interval: 5m
+  history_depth: 2y
   providers:
     yahoo_finance:
       enabled: true
-      tickers:                    # stocks, ETFs, indices, forex
-        - AAPL
-        - NVDA
+      tickers:
         - SPY
         - QQQ
-        - TLT
-        - GLD
-        - EURUSD=X
-
-    coingecko:
-      enabled: true
-      tickers:                    # crypto
-        - BTC
-        - ETH
-        - SOL
-
-    # Add any provider that implements MarketDataProvider:
-    # binance:
-    #   enabled: true
-    #   api_key: ${BINANCE_API_KEY}
-    #   tickers: [BTCUSDT, ETHUSDT]
-    #
-    # alpha_vantage:
-    #   enabled: false
-    #   api_key: ${ALPHA_VANTAGE_KEY}
-    #   tickers: [GDP, CPI, FEDFUNDS]
-
-
-# ─────────────────────────────────────────────────────────────────────
-# RISK ENGINE
-# ─────────────────────────────────────────────────────────────────────
+        - NVDA
+        - BTC-USD
 
 risk:
   rules:
     confidence:
       min_confidence: 0.60
-
     concentration:
       max_single_position: 0.15
       max_sector_exposure: 0.30
-
     frequency:
       max_signals_per_day: 5
-
     drawdown:
       max_portfolio_drawdown: 0.15
-
-
-# ─────────────────────────────────────────────────────────────────────
-# POSITION TRACKING
-# ─────────────────────────────────────────────────────────────────────
 
 position_tracking:
   confirmation_timeout: 4h
   allow_user_initiated: true
 
-
-# ─────────────────────────────────────────────────────────────────────
-# AI ENGINE
-# ─────────────────────────────────────────────────────────────────────
-
 ai:
   default_provider: anthropic
-
   providers:
     anthropic:
       api_key: ${ANTHROPIC_API_KEY}
-      model: your-preferred-claude-model  # e.g., claude-sonnet-4-20250514
+      model: claude-sonnet-4-20250514
       max_tokens: 4096
       temperature: 0.3
-
     openai:
       api_key: ${OPENAI_API_KEY}
-      model: your-preferred-gpt-model     # e.g., gpt-4o
+      model: gpt-4o
+      max_tokens: 4096
+      temperature: 0.3
+    openrouter:
+      api_key: ${OPENROUTER_API_KEY}
+      model: openai/gpt-4o
       max_tokens: 4096
       temperature: 0.3
 
-    openai_mini:
-      api_key: ${OPENAI_API_KEY}
-      model: your-preferred-cheap-model   # e.g., gpt-4o-mini
-      max_tokens: 2048
-      temperature: 0.2
+  # parsed by config model; currently lightly used in runtime wiring
+  task_routing: {}
 
-  # Route different task types to different providers
-  task_routing:
-    research: anthropic           # deep analysis -> best model
-    monitoring: openai_mini       # daily checks -> cheap model
-    comparison: openai_mini       # memory generation -> cheap model
-    interface: anthropic          # chat -> best model
-
+  # parsed by config model; runtime currently wires 'macro' agent
   agents:
     macro:
       enabled: true
-      description: "Macro Strategist"
-    rates:
-      enabled: true
-      description: "Rates Strategist"
-    company:
-      enabled: true
-      description: "Company Analyst"
-    risk_advisory:
-      enabled: true
-      description: "Risk Analyst (advisory only)"
-
-
-# ─────────────────────────────────────────────────────────────────────
-# LEARNING LOOP
-# ─────────────────────────────────────────────────────────────────────
 
 learning:
-  comparison_schedule: "0 9 * * 0"  # Sunday 9am
+  comparison_schedule: "0 9 * * 0"
   min_outcome_period: 7d
   max_memories_in_context: 10
   memory_relevance_window: 90d
 
-
-# ─────────────────────────────────────────────────────────────────────
-# SCHEDULER
-# ─────────────────────────────────────────────────────────────────────
-
 scheduler:
   timezone: America/New_York
-  check_interval: 60s             # how often to scan task files
-
-  default_tasks:
-    - name: "Daily market data sync"
-      type: recurring
-      schedule: "0 16 * * 1-5"
-      handler: data_sync.market_close
-
-    - name: "Weekly portfolio comparison"
-      type: comparison
-      schedule: "0 9 * * 0"
-      handler: comparison.weekly
-
-    - name: "Daily portfolio summary"
-      type: recurring
-      schedule: "0 17 * * 1-5"
-      handler: analysis.daily_summary
-
-
-# ─────────────────────────────────────────────────────────────────────
-# LOGGING
-# ─────────────────────────────────────────────────────────────────────
+  check_interval: 60s
+  default_tasks: []  # currently not auto-created by startup
 
 logging:
   level: INFO
-  audit_events: true              # persist all events to JSONL files
-  llm_calls: true                 # log LLM API calls for cost tracking
+  audit_events: true
+  llm_calls: true
 ```
 
 ---
 
-## Environment Variables (.env)
+## Current `.env` Example
 
 ```bash
-# .env -- secrets only, NEVER committed to git
+# integrations
+TELEGRAM_BOT_TOKEN=...
+DISCORD_BOT_TOKEN=...
 
-# AI Providers
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
-OPENROUTER_API_KEY=sk-or-v1-...
+# ai providers
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+OPENROUTER_API_KEY=...
 
-# Telegram
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
-
-# Email
-EMAIL_USER=trading@yourdomain.com
-EMAIL_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
-
-# Webhooks (optional)
-WEBHOOK_AUTH_TOKEN=your-secret-token
+# plugin tools
+SERPER_API_KEY=...
 ```
 
 ---
 
-## Configuration Loading
+## Notes on Config Fields That Are Not Fully Wired Yet
 
-At startup:
-
-1. Load `.env` into environment (via `python-dotenv`)
-2. Load `config.yaml`, resolve `${ENV_VAR}` references
-3. Validate against Pydantic settings models
-4. Fail fast with clear errors if required config is missing
-5. Create `home_dir` and subdirectories if they don't exist
-6. Initialize `db.sqlite` if it doesn't exist
-7. Write default task files if `tasks/` is empty
+- `scheduler.default_tasks`: parsed, but startup currently does not auto-create those tasks.
+- `learning.comparison_schedule`: parsed, but no automatic task creation from this value.
+- `ai.task_routing`: parsed, but runtime mostly uses default provider flow today.
+- `ai.agents`: runtime currently wires `macro`; additional agent names in config are target-state.
 
 ---
 
-## Custom Scraper Interface
+## Coming Soon (Doc References You May Still See Elsewhere)
 
-Users write Python scripts in a `scrapers/` directory:
-
-```python
-# scrapers/defense_contracts.py
-
-async def scrape() -> list[dict]:
-    """
-    Returns a list of events to publish.
-    Each dict becomes the payload of an integration.input event.
-    """
-    return [
-        {
-            "headline": "DoD awards $2.1B contract to Palantir",
-            "ticker": "PLTR",
-            "source_url": "https://...",
-        }
-    ]
-
-# Optional metadata
-META = {
-    "name": "Defense Contracts Scraper",
-    "description": "Monitors defense contract awards",
-}
-```
-
-The custom loader imports and runs these on the configured schedule.
+The following appear in older architecture examples but are not wired in the current runtime:
+- Email/webhook/custom scraper integrations
+- CoinGecko and additional market providers as first-class runtime options
+- End-to-end autonomous signal pipeline wiring from live inputs

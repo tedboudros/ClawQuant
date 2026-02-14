@@ -1,226 +1,150 @@
-# Dual Portfolio & Learning Loop
+# Dual Portfolio and Learning Loop
 
-The system maintains two parallel portfolios and learns from their divergences. The AI and human teach each other over time.
-
----
-
-## The Two Portfolios
-
-### AI Portfolio (Paper)
-
-Every approved signal is **always** assumed executed. The AI's pure, unbiased track record.
-
-Stored as JSON files in `~/.clawquant/positions/ai/`.
-
-### Human Portfolio (Actual)
-
-Tracks what the user **actually** did. Updated via:
-
-| Source | Trust Level | How |
-|--------|-------------|-----|
-| User confirmation | High | "bought NVDA at 130" via Telegram/chat |
-| User rejection | High | "skipping this one" |
-| User-initiated trade | High | "bought TSLA on my own at 245" |
-| Broker read-only sync | Highest | Optional integration (future) |
-| Assumed execution | Low | No response after timeout (default: 4h) |
-
-Stored as JSON files in `~/.clawquant/positions/human/`.
-
-### Why Two?
-
-1. **Clean AI benchmarking**: AI portfolio shows pure decision quality
-2. **Honest human tracking**: Human portfolio shows actual results
-3. **Divergence analysis**: When they differ, we measure who was right
-4. **Bidirectional learning**: AI learns from human intuition, human learns from AI consistency
+This doc describes what is implemented today and what is still target-state.
 
 ---
 
-## Divergence Types
+## Status Snapshot
 
-| Type | Scenario |
-|------|----------|
-| `human_skipped` | AI signals buy/sell, human does nothing |
-| `human_modified` | AI says buy 100 units, human buys 50 |
-| `human_initiated` | Human trades something AI didn't suggest |
-| `timing_divergence` | Both agree on direction, different timing/price |
+### Implemented now
+
+- Dual portfolio files:
+  - `positions/ai/*.json`
+  - `positions/human/*.json`
+- Comparison task handler: `comparison.weekly`
+- Memory generation model + storage:
+  - JSON files in `memories/`
+  - SQLite index in `memory_index`
+- Memory lookup API/tooling (`get_memories`, `Store.search_memories`)
+
+### Not fully wired / coming soon
+
+- Automatic scheduling from `learning.comparison_schedule`
+- Automatic assumed-execution timeout flow from `position_tracking.confirmation_timeout`
+- Broker sync path for human portfolio
+- Full live orchestrator context-pack loop that routinely feeds memories into every production decision
 
 ---
 
-## The Learning Loop
+## Portfolio Model
 
-A recurring scheduled task (weekly by default) that converts divergences into structured learnings.
+### AI Portfolio (paper)
+
+- Stored in `~/.clawquant/positions/ai/`
+- Intended to represent system-side execution tracking
+- In the default chat-first runtime, this portfolio is mainly updated where risk/orchestrator flows are explicitly invoked (target-state path), not by everyday chat tasking alone
+
+### Human Portfolio (actual)
+
+- Stored in `~/.clawquant/positions/human/`
+- Updated directly by AI tools such as:
+  - `confirm_trade`
+  - `skip_trade`
+  - `close_position`
+  - `user_initiated_trade`
+
+---
+
+## Why Keep Two Portfolios
+
+- Compare system recommendations versus actual user behavior.
+- Quantify divergence outcomes over time.
+- Turn disagreements into explicit lessons (`Memory` objects).
+
+---
+
+## Divergence Detection (Current Handler Logic)
+
+`plugins/task_handlers/comparison.py` currently classifies and handles:
+
+- `human_skipped`
+- `human_initiated`
+- `timing_divergence` (specific conditions)
+
+Note:
+- The `Memory` model supports `human_modified`, but current classifier logic does not yet produce that type.
+
+---
+
+## Comparison Handler Flow (Implemented)
 
 ```mermaid
 graph TB
-    subgraph detect [Step 1: Detect]
-        AP["AI Portfolio (positions/ai/)"]
-        HP["Human Portfolio (positions/human/)"]
-        DIFF[Find divergences]
-        AP --> DIFF
-        HP --> DIFF
-    end
-
-    subgraph evaluate [Step 2: Evaluate]
-        DIFF --> WAIT{Enough time passed?}
-        WAIT -->|Yes| CALC[Calculate outcomes]
-        WAIT -->|No| SKIP[Check next week]
-    end
-
-    subgraph generate [Step 3: Generate]
-        CALC --> LLM[LLM analyzes divergence]
-        LLM --> MEM["Memory JSON file written"]
-    end
-
-    subgraph feedback [Step 4: Feed Back]
-        MEM --> IDX["SQLite index updated"]
-        IDX --> CTX[Included in future ContextPacks]
-    end
+    A[Load AI positions] --> C[Classify divergences]
+    B[Load Human positions] --> C
+    C --> D{Enough outcome time passed?}
+    D -->|No| E[Skip for now]
+    D -->|Yes| F[Generate memory via LLM]
+    F --> G[Write memory JSON]
+    G --> H[Index in SQLite]
+    H --> I[Publish memory.created event]
 ```
 
-### Step 1: Detect
+### Outcome-time gating
 
-Compare position files in `positions/ai/` vs `positions/human/`. Find cases where they differ.
+- Minimum age is controlled by handler config (`min_outcome_days`), loaded from `learning.min_outcome_period` in `main.py`.
 
-### Step 2: Evaluate
+### Duplicate prevention
 
-Wait for the configured minimum outcome period (default: 7 days). Calculate what happened to the asset price. Compute P&L for both sides.
-
-### Step 3: Generate
-
-This IS an LLM task. The comparison sends divergence details to the AI:
-
-> "You recommended BUY NVDA at $130. The human skipped, saying 'earnings will disappoint.' Two weeks later, NVDA dropped to $165 after an earnings miss. Who was right? What should we learn?"
-
-The LLM produces a structured Memory with a lesson, tags, and confidence impact.
-
-### Step 4: Feed Back
-
-The Memory is:
-1. Saved as a JSON file in `memories/mem_{id}.json`
-2. Indexed in SQLite (tags, ticker, dates) for fast retrieval
-3. Included in future ContextPacks when relevant (by ticker, sector, catalyst type, recency)
+- Handler checks existing memories for same divergence before creating new ones.
 
 ---
 
-## Memory Storage
+## Memory Persistence
 
-### JSON File (source of truth)
+### JSON source of truth
+
+Example path: `~/.clawquant/memories/mem_<id>.json`
+
+### SQLite index
+
+Table: `memory_index`
+
+Key indexed fields:
+- `id`
+- `created_at`
+- `who_was_right`
+- `tags`
+- `ticker`
+- `confidence_impact`
+- `source`
+
+---
+
+## How to Run the Learning Loop Today
+
+The runtime does **not** auto-create comparison tasks from config yet. Create one explicitly with handler `comparison.weekly`.
+
+Example task payload concept:
 
 ```json
-// memories/mem_x1y2z3.json
 {
-  "id": "mem_x1y2z3",
-  "created_at": "2026-03-01T09:00:00Z",
-  "signal_id": "sig_a1b2c3",
-  "divergence_type": "human_skipped",
-  "ai_action": "BUY AAPL at 180",
-  "human_action": "Skipped -- thinks earnings will disappoint",
-  "outcome_period": "3 weeks",
-  "outcome": "AAPL dropped to 165 (-8.3%)",
-  "ai_pnl": -15.0,
-  "human_pnl": 0.0,
-  "who_was_right": "human",
-  "lesson": "Human showed accurate intuition about AAPL pre-earnings risk...",
-  "tags": ["earnings", "pre_earnings_caution", "AAPL", "tech"],
-  "confidence_impact": -0.1,
-  "referenced_in_decisions": 0
+  "name": "Weekly Comparison",
+  "type": "comparison",
+  "handler": "comparison.weekly",
+  "cron_expression": "0 9 * * 0",
+  "params": {}
 }
 ```
 
-### SQLite Index (for fast queries)
-
-```sql
-CREATE TABLE memory_index (
-    id TEXT PRIMARY KEY,
-    created_at TEXT,
-    who_was_right TEXT,
-    tags TEXT,
-    ticker TEXT,
-    confidence_impact REAL
-);
-```
-
-The index enables queries like "find memories about AAPL with tag 'earnings' from the last 90 days" without scanning every JSON file.
+You can create this via:
+- AI tool `create_task`
+- HTTP `POST /tasks`
+- direct JSON task file under `~/.clawquant/tasks/`
 
 ---
 
-## Memory Examples
+## Current Practical Limits
 
-### Human was right about earnings caution
-
-```
-Signal: BUY AAPL at $180 (confidence 0.72)
-Human: "Skipped -- thinks earnings will disappoint"
-Result: AAPL dropped to $165 (-8.3%). Human was right.
-Lesson: Pre-earnings signals for AAPL need higher confidence.
-         Consider requiring >0.80 for signals within 3 weeks of earnings.
-Tags: [earnings, pre_earnings_caution, AAPL, tech]
-```
-
-### AI was right about macro call
-
-```
-Signal: BUY TLT at $92 (confidence 0.75)
-Human: "Skipped -- rates will stay higher for longer"
-Result: TLT rose to $98 (+6.5%) as Fed signaled cuts. AI was right.
-Lesson: AI's macro strategist correctly identified Fed rhetoric shift.
-         Human should trust AI macro calls more when rates agent concurs.
-Tags: [rates, fed, macro, TLT, bonds]
-```
-
-### Human found a blind spot
-
-```
-AI: No signal (PLTR not in watchlist)
-Human: "Bought PLTR at $22 based on defense contract news"
-Result: PLTR rose to $38 (+72%). Human was right.
-Lesson: AI's watchlist was too narrow. Consider adding defense/AI tickers
-         and a defense contract scraper integration.
-Tags: [defense, AI_convergence, PLTR, blind_spot, watchlist_gap]
-```
+- No automatic “assumed” human trade creation after timeout.
+- No automatic broker reconciliation path.
+- Memory usage in live decisioning is strongest in orchestrator-based flows, which are currently target-state for default runtime.
 
 ---
 
-## How Memories Affect Future Decisions
+## Target-State Direction
 
-When the orchestrator builds a ContextPack for an AAPL analysis, it queries SQLite for relevant memories:
-
-```
-Relevant Memories:
-1. [2 months ago] Human skipped BUY AAPL at $180 before earnings.
-   AAPL dropped 8.3%. Human was right. Pre-earnings signals need
-   higher confidence.
-
-2. [5 months ago] AI recommended BUY AAPL at $165 post-earnings dip.
-   Both agreed. AAPL rose 12%. Post-earnings dips are good entries.
-```
-
-The AI sees these and adjusts: "Given pre-earnings caution has been validated for AAPL, and my confidence is only 0.68, I should either find stronger evidence or wait until after earnings."
-
----
-
-## Configuration
-
-```yaml
-learning:
-  comparison_schedule: "0 9 * * 0"    # Sunday 9am
-  min_outcome_period: 7d              # wait before judging
-  max_memories_in_context: 10         # per context pack
-  memory_relevance_window: 90d        # recency filter
-
-position_tracking:
-  confirmation_timeout: 4h            # assume followed after 4h
-  allow_user_initiated: true          # users can report non-AI trades
-```
-
----
-
-## Simulator Integration
-
-The simulator can pre-generate memories:
-1. Run simulation on historical data
-2. Compare simulated signals against actual market outcomes
-3. Generate memories tagged with `source: "simulation"`
-4. Optionally import into production memory bank
-
-The live system starts with learned experience rather than a blank slate.
+Planned steady-state behavior:
+- Auto-install comparison tasks from config on startup.
+- Full orchestrator pipeline continuously consumes relevant memories in analysis context packs.
+- Expanded divergence taxonomy and richer scoring (including `human_modified` and more robust timing/size deltas).

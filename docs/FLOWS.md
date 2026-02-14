@@ -1,267 +1,104 @@
 # Event Flows
 
-Core event flows through the system. Every flow is a chain of events connected by a `correlation_id`, persisted as JSONL in `~/.clawquant/events/`.
+This document separates:
+- **Current runtime flows** (implemented and wired)
+- **Target-state flows** (coming soon)
 
 ---
 
-## The Golden Path: Trigger to Signal Delivery
+## Current Runtime Flow: Chat Message to Reply
 
 ```mermaid
 sequenceDiagram
-    participant Plugin as Integration Plugin (dumb pipe)
-    participant API as Core HTTP API
-    participant AIF as AI Interface (tool-calling)
+    participant User as User (Telegram/Discord)
+    participant Int as Integration Plugin
+    participant AI as AI Interface
+    participant Tools as Built-in + Plugin Tools
     participant Bus as EventBus
-    participant Data as Data Layer
-    participant AI as Orchestrator
-    participant Risk as Risk Engine
-    participant Out as Output Plugin
-    participant Files as Files + SQLite
+    participant Out as OutputDispatcher
 
-    Plugin->>API: POST /events (raw user text)
-    API->>AIF: forward to AI Interface
-    AIF->>AIF: LLM determines intent via tool-calling
-    AIF->>Bus: publish event (integration.input)
-    Bus->>Files: append to events/YYYY-MM-DD.jsonl
+    User->>Int: Send message
+    Int->>AI: handle_message(text, channel_id, source)
+    AI->>AI: Load conversation history (SQLite-backed)
 
-    Bus->>Data: assemble context pack
-    Data->>Files: read positions, memories, market data
-    Data-->>Bus: context.assembled
-
-    Bus->>AI: run analysis
-    AI->>AI: agent chain
-    AI->>Files: write memo to memos/
-    AI->>Bus: memo.created + signal.proposed
-    Bus->>Files: append to events/
-
-    Bus->>Risk: validate signal
-    Risk->>Files: read AI portfolio positions
-
-    alt Approved
-        Risk->>Bus: signal.approved
-        Risk->>Files: write AI position to positions/ai/
-        Bus->>Files: write signal to signals/
-        Bus->>Out: deliver signal
-        Out->>Plugin: send notification
-        AI->>Files: write task to tasks/ (monitoring)
-    else Rejected
-        Risk->>Bus: signal.rejected
-        Bus->>Files: append to events/
+    alt First message in channel
+        AI->>AI: Persist merged onboarding directive + initial user message
+    else Existing conversation
+        AI->>AI: Persist plain user message
     end
+
+    loop up to max rounds
+        AI->>Tools: tool_call (0..N tools)
+        Tools-->>AI: tool results
+    end
+
+    AI->>AI: Persist assistant response
+    AI->>Bus: publish integration.output{text, adapter, channel_id}
+    Bus->>Out: dispatch
+    Out->>Int: send_text
+    Int->>User: Reply delivered
 ```
+
+Key behaviors:
+- Multi-tool loops in one turn.
+- Plugin tools are dynamically available (`get_tools` / `call_tool`).
+- `integration.output` is adapter-agnostic and routed centrally.
 
 ---
 
-## Full Example: Email Tip to Sell (2+ months)
+## Current Runtime Flow: Create Scheduled AI Task (`ai.run_prompt`)
 
-### Day 0: Email arrives
-
-```
-1. integration.input
-   source: email, from: investor@email.com, subject: "Look at NVDA"
-   priority: high (matched watch rule)
-
-2. context.assembled
-   NVDA: $128.50 | SPY: $510.20 | VIX: 14.2
-   AI portfolio: [...] | Human portfolio: [...]
-   Memories: ["Last tip from this investor returned +8%"]
-
-3. memo.created
-   → Written to memos/2026-02-13_NVDA_buy.md
-   Thesis: datacenter demand + trusted source
-
-4. signal.proposed
-   NVDA | BUY | confidence: 0.78 | entry: $130 | stop: $118 | target: $152
-
-5. signal.approved
-   → AI portfolio: NVDA position opened at $130 (positions/ai/NVDA.json)
-   → Signal written to signals/sig_a1b2c3.json
-
-6. signal.delivered via Telegram
-   "BUY NVDA at $130 | Confidence: 78% | Stop: $118 | Target: $152"
-
-7. task.created
-   → Written to tasks/task_monitor_nvda.json
-   "Monitor NVDA daily at market close"
-```
-
-### Day 0: User responds
-
-```
-8. integration.input via Telegram (raw text forwarded to AI Interface)
-   "bought at 130"
-
-9. AI Interface uses tool-calling:
-   LLM calls confirm_trade(ticker="NVDA", price=130)
-
-10. position.confirmed
-    → Human portfolio: NVDA opened at $130 (positions/human/NVDA.json)
-    → Both portfolios aligned
-```
-
-### Day 60: Daily monitor detects earnings
-
-```
-10. schedule.fired: "Monitor NVDA daily"
-
-11. AI queries data, finds earnings in 7 days
-
-12. task.created: "Pre-earnings analysis" (tasks/task_nvda_pre_earnings.json)
-    run_at: 2026-04-17 09:00, parent: task_monitor_nvda
-
-13. task.created: "Post-earnings analysis" (tasks/task_nvda_post_earnings.json)
-    run_at: 2026-04-18 18:00, parent: task_monitor_nvda
-
-14. signal.delivered (hold notification)
-    "NVDA Update: $142.30 (+9.5%) | Earnings in 7 days | HOLD"
-```
-
-### Day 66: Pre-earnings
-
-```
-15. schedule.fired: "Pre-earnings analysis NVDA"
-
-16. context.assembled
-    NVDA: $145.10 (+11.6%) | Consensus EPS: $0.82
-    Memories: ["Human cautious around earnings -- skipped last 2"]
-
-17. signal.delivered (analysis, not a trade signal)
-    "NVDA Pre-Earnings: Consensus looks beatable. Recommendation: HOLD"
-```
-
-### Day 67: Post-earnings, SELL
-
-```
-18. schedule.fired: "Post-earnings analysis NVDA"
-
-19. NVDA after-hours: $131.20 | EPS: $0.79 (miss) | Guidance: below
-
-20. memo.created → memos/2026-04-18_NVDA_sell.md
-
-21. signal.proposed: SELL NVDA | confidence: 0.85
-
-22. signal.approved
-    → AI portfolio: NVDA closed at $131.20 | P&L: +0.9%
-
-23. signal.delivered via Telegram
-    "SELL NVDA | Current: $131.20 | AI P&L: +0.9%"
-
-24. integration.input via Telegram (raw text forwarded to AI Interface):
-    "sold at 125"
-
-25. AI Interface uses tool-calling:
-    LLM calls close_position(ticker="NVDA", price=125)
-
-26. position.confirmed (close)
-    → Human portfolio: NVDA closed at $125.00 | P&L: -3.8%
-    → DIVERGENCE: AI got +0.9%, human got -3.8%
-```
-
-### Day 74: Learning
-
-```
-26. schedule.fired: "Weekly portfolio comparison"
-
-27. Divergence found: timing_divergence on NVDA sell
-    AI: sold at 131.20 | Human: sold at 125.00
-
-28. memory.created → memories/mem_timing_nvda.json
-    Lesson: "After-hours earnings misses gap down further at open.
-             Act quickly on post-earnings SELL signals."
-    Tags: [earnings, timing, NVDA]
-```
+1. User asks to schedule recurring monitoring.
+2. AI uses `list_task_handlers` and `create_task`.
+3. `create_task` defaults:
+   - `params.channel_id` = originating conversation channel
+   - `params.adapter` = originating adapter when available
+4. Scheduler fires task on cron.
+5. Handler `ai.run_prompt` runs same central AI stack.
+6. Scheduled run injects: `system prompt -> last 10 channel messages -> task prompt`.
+7. Result is published to `integration.output` and delivered back to same channel.
 
 ---
 
-## Flow: Human Skips a Signal
+## Current Runtime Flow: Stop Task by Name
 
-```
-1. signal.delivered: "BUY AAPL at $180"
-
-2. integration.input via Telegram (raw text forwarded to AI Interface):
-   "nah, earnings will disappoint. skipping"
-
-3. AI Interface uses tool-calling:
-   LLM calls skip_trade(ticker="AAPL", reason="thinks earnings will disappoint")
-
-4. position.skipped
-   → AI portfolio: AAPL opened at $180 (positions/ai/AAPL.json)
-   → Human portfolio: no file created
-   → user_notes: "thinks earnings will disappoint"
-
---- 3 weeks later, AAPL drops to $165 ---
-
-4. memory.created (weekly comparison)
-   who_was_right: human
-   lesson: "Pre-earnings caution for AAPL validated"
-```
+1. User says “stop/remove/delete task X”.
+2. AI can call `delete_task_by_name` directly.
+3. If one match: task deleted in same turn.
+4. If multiple matches: AI asks for narrower name.
 
 ---
 
-## Flow: Human-Initiated Trade
+## Current Runtime Flow: News/Web Tooling
 
-```
-1. integration.input via Telegram (raw text forwarded to AI Interface):
-   "I just bought 200 TSLA at 245. Elon tweet."
+### News
+- Tool: `get_news(topic?, limit?, as_of?)`
+- Handler: `news.briefing` for scheduled briefings
+- Output path: handler -> `integration.output` -> dispatcher -> adapter
 
-2. AI Interface uses tool-calling:
-   LLM calls user_initiated_trade(ticker="TSLA", price=245, size=200, notes="Elon tweet")
-
-3. position.confirmed
-   → Human portfolio: TSLA at $245 (positions/human/TSLA.json)
-   → AI portfolio: no TSLA position
-   → signal_id: null (no AI signal)
-   → DIVERGENCE: human_initiated
-
---- 2 weeks later, TSLA at $280 ---
-
-3. memory.created
-   who_was_right: human
-   lesson: "Human identified social media catalyst AI doesn't monitor.
-            Consider adding CEO activity integration."
-```
+### Web Search
+- Tool: `web_search(query, limit?, as_of?)`
+- Backend: Serper API (`SERPER_API_KEY`)
+- Handler `web.search` exists mainly to host tool metadata; scheduled `run()` is `no_action`.
 
 ---
 
-## Flow: Simulation Run
+## Current Runtime Flow: `notifications.send`
 
-```
-1. User via chat: "Backtest Claude vs GPT on 2024"
-
-2. simulation.started
-   → simulations/claude_2024/ directory created
-   → simulations/gpt_2024/ directory created
-
-3. Historical events replayed through pipeline
-   TimeContext advances chronologically
-   Signals captured to simulations/{name}/signals/
-   Memos written to simulations/{name}/memos/
-
-4. simulation.completed
-   → simulations/{name}/results.json written
-
-5. signal.delivered (results notification)
-   "Simulation Complete:
-    Claude: Sharpe 1.42 | CAGR 18.3%
-    GPT:    Sharpe 1.15 | CAGR 14.1%
-    SPY:    +26.3%"
-```
+1. Scheduler fires task with handler `notifications.send`.
+2. Handler validates `params.message`.
+3. Publishes `integration.output` with optional `adapter`/`channel_id`.
+4. Dispatcher routes to output integration(s).
 
 ---
 
-## Flow: AI Creates Research Task from Scraper
+## Target-State / Coming Soon Flows
 
-```
-1. integration.input from defense_contracts scraper
-   "DoD awards $2.1B to Palantir for AI/ML platform"
+The following are documented architecture goals but are **not fully wired as the default live runtime path**:
 
-2. context.assembled
-   PLTR: $78.50 | +12% last month
-   Memories: ["Defense contract signals: 65% hit rate"]
+- Live input -> orchestrator agent chain -> `signal.proposed` -> risk gate -> delivery.
+- Email/webhook/custom scraper as first-class live integrations.
+- Automatic recurring learning/comparison task creation from config on startup.
+- `run_analysis` event path consumed by an active orchestrator subscriber in production runtime.
 
-3. memo.created → memos/2026-03-15_PLTR_buy.md
-
-4. signal.proposed: BUY PLTR | confidence: 0.71
-
-5. → continues through risk gate → delivery → user response
-```
+Keep these flows in design docs as target state, not current behavior.
