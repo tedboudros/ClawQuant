@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 import questionary
+import yaml
+from dotenv import dotenv_values
 from questionary import Choice
 
 from cli.banner import print_banner
@@ -55,6 +57,7 @@ def run_setup(home_dir: Path | None = None) -> None:
 
     # Step 2: Discover all available plugins
     all_plugins = discover_plugins()
+    existing_values = _load_existing_plugin_values(home_dir, all_plugins)
 
     # Step 3: Let user select plugins by category
     enabled_plugins: list[PluginInfo] = []
@@ -82,7 +85,7 @@ def run_setup(home_dir: Path | None = None) -> None:
     for plugin in enabled_plugins:
         if not plugin.has_config:
             continue
-        values = _configure_plugin(plugin)
+        values = _configure_plugin(plugin, existing_values.get(plugin.name, {}))
         if values is not None:
             plugin_values[plugin.name] = values
 
@@ -180,10 +183,11 @@ def _select_plugins(category: str, plugins: list[PluginInfo]) -> list[PluginInfo
         return selected  # type: ignore[return-value]
 
 
-def _configure_plugin(plugin: PluginInfo) -> dict[str, Any] | None:
+def _configure_plugin(plugin: PluginInfo, existing: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Walk through a plugin's config fields and collect values."""
     if not plugin.config_fields:
         return {}
+    existing = existing or {}
 
     # Show setup instructions if present
     instructions = plugin.setup_instructions.strip()
@@ -193,32 +197,61 @@ def _configure_plugin(plugin: PluginInfo) -> dict[str, Any] | None:
             print(f"  {line}")
         print()
 
+    missing_required = [
+        field for field in plugin.config_fields
+        if field.required and not _has_value(existing.get(field.key))
+    ]
+    can_skip = len(missing_required) == 0
+
+    action = questionary.select(
+        f"{plugin.display_name}:",
+        choices=[
+            Choice("Configure now", value="configure"),
+            Choice("Skip (keep current values)", value="skip"),
+        ],
+        default="skip" if can_skip else "configure",
+        style=STYLE,
+    ).ask()
+    if action is None:
+        _abort()
+    if action == "skip":
+        if not can_skip:
+            names = ", ".join(f.key for f in missing_required)
+            print(f"  Can't skip {plugin.display_name}. Missing required fields: {names}")
+        else:
+            return existing
+
     values: dict[str, Any] = {}
 
     for field in plugin.config_fields:
-        value = _prompt_field(field, plugin.display_name)
+        current = existing.get(field.key)
+        value = _prompt_field(field, plugin.display_name, current=current)
+        if value is None and _has_value(current):
+            value = current
         if value is not None:
             values[field.key] = value
 
     return values
 
 
-def _prompt_field(field: ConfigField, plugin_name: str) -> Any:
+def _prompt_field(field: ConfigField, plugin_name: str, current: Any = None) -> Any:
     """Prompt for a single config field based on its type."""
     label = field.label
     if field.description:
         label = f"{field.label} ({field.description})"
 
-    default = field.default
+    default = current if _has_value(current) else field.default
 
     match field.type:
         case "secret":
             value = questionary.password(
-                f"{field.label}:",
+                f"{field.label}{' (leave blank to keep current)' if _has_value(current) else ''}:",
                 style=STYLE,
             ).ask()
             if value is None:
                 _abort()
+            if value == "" and _has_value(current):
+                return None
             return value
 
         case "choice":
@@ -284,3 +317,78 @@ def _abort() -> None:
     """User pressed Ctrl+C or cancelled."""
     print("\n  Setup cancelled.\n")
     sys.exit(0)
+
+
+def _has_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip() != ""
+    if isinstance(value, list):
+        return len(value) > 0
+    return True
+
+
+def _load_existing_plugin_values(
+    home_dir: Path,
+    all_plugins: dict[str, list[PluginInfo]],
+) -> dict[str, dict[str, Any]]:
+    """Load existing config/env and map values per plugin."""
+    config_path = home_dir / "config.yaml"
+    env_path = home_dir / ".env"
+
+    config: dict[str, Any] = {}
+    if config_path.exists():
+        with open(config_path) as f:
+            config = yaml.safe_load(f) or {}
+
+    env = dotenv_values(env_path) if env_path.exists() else {}
+
+    by_name: dict[str, PluginInfo] = {
+        p.name: p
+        for plugins in all_plugins.values()
+        for p in plugins
+    }
+
+    out: dict[str, dict[str, Any]] = {}
+    for name, plugin in by_name.items():
+        vals = _read_plugin_values_from_config(config, plugin)
+        # Resolve secret placeholders from .env
+        for field in plugin.config_fields:
+            if field.type == "secret" and field.env_var:
+                env_val = env.get(field.env_var)
+                if env_val:
+                    vals[field.key] = env_val
+        out[name] = vals
+    return out
+
+
+def _read_plugin_values_from_config(config: dict[str, Any], plugin: PluginInfo) -> dict[str, Any]:
+    """Extract existing values for a plugin from config.yaml shape."""
+    values: dict[str, Any] = {}
+    category = plugin.category
+
+    if category == "ai_provider":
+        values = (((config.get("ai") or {}).get("providers") or {}).get(plugin.name) or {}).copy()
+    elif category == "market_data":
+        values = (((config.get("market_data") or {}).get("providers") or {}).get(plugin.name) or {}).copy()
+    elif category == "integration":
+        integ = ((config.get("integrations") or {}).get(plugin.name) or {}).copy()
+        channels = integ.get("channels") or []
+        if channels and isinstance(channels, list):
+            first = channels[0] or {}
+            for key in ("chat_id", "direction"):
+                if key in first:
+                    integ[key] = first[key]
+        values = integ
+    elif category == "risk_rule":
+        values = (((config.get("risk") or {}).get("rules") or {}).get(plugin.name) or {}).copy()
+    elif category == "task_handler":
+        values = (((config.get("scheduler") or {}).get("handlers") or {}).get(plugin.name) or {}).copy()
+    elif category == "agent":
+        values = (((config.get("ai") or {}).get("agents") or {}).get(plugin.name) or {}).copy()
+
+    # Strip generic keys that are not direct field values
+    values.pop("enabled", None)
+    values.pop("channels", None)
+    return values

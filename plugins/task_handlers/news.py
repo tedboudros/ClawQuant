@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 from urllib.parse import quote
 from xml.etree import ElementTree
@@ -42,12 +43,40 @@ _GENERAL_FEEDS = [
 ]
 
 
-async def fetch_market_news(topic: str | None = None, limit: int = 8) -> list[dict]:
+def _parse_as_of(as_of: str | None) -> datetime | None:
+    if not as_of:
+        return None
+    try:
+        dt = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _to_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = parsedate_to_datetime(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+async def fetch_market_news(topic: str | None = None, limit: int = 8, as_of: str | None = None) -> list[dict]:
     """Fetch market headlines from RSS feeds."""
+    cutoff = _parse_as_of(as_of)
     urls = list(_GENERAL_FEEDS)
     if topic:
+        query = quote(topic)
         ticker = quote(topic.upper())
         urls.append(f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US")
+        urls.append(f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en")
+        urls.append(f"https://news.google.com/rss/search?q={ticker}%20stock&hl=en-US&gl=US&ceid=US:en")
 
     items: list[dict] = []
     async with httpx.AsyncClient(timeout=20.0, headers={"User-Agent": "ClawQuant/0.1"}) as client:
@@ -66,6 +95,9 @@ async def fetch_market_news(topic: str | None = None, limit: int = 8) -> list[di
     for item in items:
         key = item["title"].strip().lower()
         if not key or key in seen:
+            continue
+        pub_dt = _to_datetime(item.get("published"))
+        if cutoff and pub_dt and pub_dt > cutoff:
             continue
         seen.add(key)
         deduped.append(item)
@@ -126,6 +158,10 @@ class NewsBriefHandler:
                                 "type": "integer",
                                 "description": "Maximum number of headlines (default: 8)",
                             },
+                            "as_of": {
+                                "type": "string",
+                                "description": "Optional ISO datetime cutoff for sandbox mode. Only return headlines published at or before this time.",
+                            },
                         },
                     },
                 },
@@ -145,8 +181,11 @@ class NewsBriefHandler:
 
         topic = args.get("topic")
         limit = int(args.get("limit", self._default_limit))
-        headlines = await fetch_market_news(topic=topic, limit=limit)
+        as_of = args.get("as_of")
+        headlines = await fetch_market_news(topic=topic, limit=limit, as_of=as_of)
         if not headlines:
+            if as_of:
+                return "No market headlines found for that query before the requested as_of time."
             return "No market headlines available right now."
 
         lines = []
@@ -160,10 +199,11 @@ class NewsBriefHandler:
     async def run(self, params: dict) -> TaskResult:
         topic = params.get("topic")
         limit = int(params.get("limit", self._default_limit))
+        as_of = params.get("as_of")
         channel_id = params.get("channel_id")
         summarize = bool(params.get("summarize", True))
 
-        headlines = await fetch_market_news(topic=topic, limit=limit)
+        headlines = await fetch_market_news(topic=topic, limit=limit, as_of=as_of)
         if not headlines:
             return TaskResult(status="no_action", message="No news headlines available")
 
