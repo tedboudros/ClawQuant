@@ -30,11 +30,16 @@ PLUGIN_META = {
     "class_name": "DiscordIntegration",
     "pip_dependencies": [],
     "setup_instructions": """
-1. Create a bot in Discord Developer Portal
-2. Copy the bot token
-3. Invite bot to your server/channel with Send Messages + Read Message History permissions
-4. Enable Message Content Intent in bot settings
-5. Copy your Discord channel ID (Developer Mode -> right-click channel -> Copy ID)
+1. Go to Discord Developer Portal: https://discord.com/developers/applications
+2. Create an application, then open the "Bot" tab and click "Add Bot"
+3. Copy the bot token from the Bot tab
+4. In Bot settings, enable "Message Content Intent" (required for reading message text)
+5. Open OAuth2 -> URL Generator:
+   - Scopes: select `bot` (and `applications.commands` optional)
+   - Bot Permissions: select at least `View Channels`, `Send Messages`, `Read Message History`
+6. Open the generated URL and add the bot to your server
+   (you must be server owner or have "Manage Server" permission)
+7. In Discord, enable Developer Mode (User Settings -> Advanced), then right-click your target channel -> Copy Channel ID
 """,
     "config_fields": [
         {
