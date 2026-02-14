@@ -279,6 +279,23 @@ class Store:
         except Exception:
             return str(content)
 
+    @staticmethod
+    def _parse_legacy_content(content_text: str) -> object:
+        """Best-effort parse for legacy text-only content storage."""
+        raw = str(content_text or "")
+        stripped = raw.strip()
+        if not stripped:
+            return ""
+
+        # Only attempt JSON parse for likely JSON payloads.
+        if stripped[0] in {"{", "["} and stripped[-1] in {"}", "]"}:
+            try:
+                parsed = json.loads(stripped)
+            except Exception:
+                return raw
+            return parsed
+        return raw
+
     def append_conversation_message(
         self,
         channel_id: str,
@@ -311,12 +328,13 @@ class Store:
     def load_conversation_history(self) -> dict[str, list[dict[str, object]]]:
         """Load full persisted conversation history for all channels."""
         rows = self.db.execute(
-            """SELECT channel_id, role, content, message_json
+            """SELECT id, channel_id, role, content, message_json
                FROM conversation_messages
                ORDER BY channel_id ASC, created_at ASC, id ASC"""
         ).fetchall()
 
         history: dict[str, list[dict[str, object]]] = {}
+        backfill: list[tuple[str, int]] = []
         for row in rows:
             channel = row["channel_id"]
             message_json = row["message_json"]
@@ -329,10 +347,37 @@ class Store:
                     history.setdefault(channel, []).append(parsed)
                     continue
 
-            history.setdefault(channel, []).append({
-                "role": row["role"],
-                "content": row["content"],
-            })
+            role = str(row["role"] or "user")
+            legacy_content = self._parse_legacy_content(str(row["content"] or ""))
+
+            # If content itself is a full message payload, normalize it.
+            if isinstance(legacy_content, dict) and legacy_content.get("role"):
+                rebuilt = dict(legacy_content)
+                if "content" not in rebuilt:
+                    rebuilt["content"] = ""
+                if not rebuilt.get("role"):
+                    rebuilt["role"] = role
+            else:
+                rebuilt = {
+                    "role": role,
+                    "content": legacy_content,
+                }
+
+            history.setdefault(channel, []).append(rebuilt)
+            try:
+                backfill.append((json.dumps(rebuilt, ensure_ascii=False), int(row["id"])))
+            except Exception:
+                logger.debug("Skipping message_json backfill for row id=%s", row["id"], exc_info=True)
+
+        if backfill:
+            try:
+                self.db.executemany(
+                    "UPDATE conversation_messages SET message_json = ? WHERE id = ?",
+                    backfill,
+                )
+                self.db.commit()
+            except Exception:
+                logger.exception("Failed to backfill message_json for legacy conversation rows")
         return history
 
     # ------------------------------------------------------------------
