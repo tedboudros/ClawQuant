@@ -53,6 +53,10 @@ curl -fsSL https://raw.githubusercontent.com/tedboudros/ClawQuant/main/install.s
 - **CLI-first setup**. One-line install, interactive setup wizard, all commands via `clawquant`.
 - **Runs on a potato**. Single async Python process, ~100MB RAM.
 
+## Vision
+
+The long-term product vision (including dual AI/human portfolios, divergence learning, and one central AI across chat + scheduled runs) is documented in [docs/VISION.md](docs/VISION.md).
+
 ## Quick Start
 
 ```bash
@@ -96,6 +100,7 @@ See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for details.
 
 | Document | Description |
 |----------|-------------|
+| [Vision](docs/VISION.md) | Product north star and non-negotiable architecture principles |
 | [Architecture](docs/ARCHITECTURE.md) | Current runtime architecture + target-state notes |
 | [Data Models](docs/DATA_MODELS.md) | Core schemas and storage mappings |
 | [Event Flows](docs/FLOWS.md) | Current live flows + target-state flows |

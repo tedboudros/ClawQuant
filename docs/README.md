@@ -12,6 +12,7 @@ This docs set now separates:
 
 | Document | Description |
 |----------|-------------|
+| [VISION.md](VISION.md) | Product north star and non-negotiable principles |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Runtime architecture (chat-first) + target-state sections |
 | [DATA_MODELS.md](DATA_MODELS.md) | Core models, file/SQLite mappings, conversation history storage |
 | [FLOWS.md](FLOWS.md) | Current production flows (Telegram/Discord + tools + scheduler) and planned flows |
