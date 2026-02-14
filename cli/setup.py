@@ -58,6 +58,7 @@ def run_setup(home_dir: Path | None = None) -> None:
     # Step 2: Discover all available plugins
     all_plugins = discover_plugins()
     existing_values = _load_existing_plugin_values(home_dir, all_plugins)
+    existing_enabled = _load_existing_enabled_plugins(home_dir)
 
     # Step 3: Let user select plugins by category
     enabled_plugins: list[PluginInfo] = []
@@ -74,7 +75,11 @@ def run_setup(home_dir: Path | None = None) -> None:
             continue
 
         if category in selectable:
-            selected = _select_plugins(category, plugins)
+            selected = _select_plugins(
+                category,
+                plugins,
+                existing_enabled.get(category, set()),
+            )
             enabled_plugins.extend(selected)
         elif category in auto_enabled:
             # Auto-enable, but still let user configure
@@ -151,16 +156,24 @@ def run_plugin_setup(plugin_name: str) -> None:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _select_plugins(category: str, plugins: list[PluginInfo]) -> list[PluginInfo]:
+def _select_plugins(
+    category: str,
+    plugins: list[PluginInfo],
+    existing_enabled_names: set[str] | None = None,
+) -> list[PluginInfo]:
     """Show a checkbox list for selecting plugins in a category."""
     label = CATEGORY_LABELS.get(category, category)
     required = category == "ai_provider"
+    existing_enabled_names = existing_enabled_names or set()
 
     choices = [
         Choice(
             title=p.choice_label,
             value=p,
-            checked=(category in ("market_data",)),  # auto-check market data
+            checked=(
+                p.name in existing_enabled_names
+                or (category == "market_data" and not existing_enabled_names)
+            ),
         )
         for p in plugins
     ]
@@ -170,13 +183,18 @@ def _select_plugins(category: str, plugins: list[PluginInfo]) -> list[PluginInfo
             f"Select {label}:",
             choices=choices,
             style=STYLE,
-            instruction="(use SPACE to select, ENTER to confirm)",
+            instruction=(
+                "(use SPACE to select, ENTER to confirm)"
+                + (" (leave empty to keep current)" if required and existing_enabled_names else "")
+            ),
         ).ask()
 
         if selected is None:
             _abort()
 
         if required and not selected:
+            if existing_enabled_names:
+                return [p for p in plugins if p.name in existing_enabled_names]
             print("  Please select at least one. Use SPACE to toggle selection, then ENTER.")
             continue
 
@@ -392,3 +410,35 @@ def _read_plugin_values_from_config(config: dict[str, Any], plugin: PluginInfo) 
     values.pop("enabled", None)
     values.pop("channels", None)
     return values
+
+
+def _load_existing_enabled_plugins(home_dir: Path) -> dict[str, set[str]]:
+    """Load currently enabled plugin names by selectable category."""
+    config_path = home_dir / "config.yaml"
+    config: dict[str, Any] = {}
+    if config_path.exists():
+        with open(config_path) as f:
+            config = yaml.safe_load(f) or {}
+
+    out: dict[str, set[str]] = {
+        "ai_provider": set(),
+        "market_data": set(),
+        "integration": set(),
+    }
+
+    ai_providers = ((config.get("ai") or {}).get("providers") or {})
+    for name, cfg in ai_providers.items():
+        if not isinstance(cfg, dict) or cfg.get("enabled", True):
+            out["ai_provider"].add(name)
+
+    md_providers = ((config.get("market_data") or {}).get("providers") or {})
+    for name, cfg in md_providers.items():
+        if not isinstance(cfg, dict) or cfg.get("enabled", True):
+            out["market_data"].add(name)
+
+    integrations = config.get("integrations") or {}
+    for name, cfg in integrations.items():
+        if not isinstance(cfg, dict) or cfg.get("enabled", True):
+            out["integration"].add(name)
+
+    return out
