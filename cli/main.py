@@ -173,6 +173,10 @@ def _plugin_toggle(name: str | None, enable: bool) -> None:
         action = "Enabled" if enable else "Disabled"
         print(f"  {action}: {name}")
     else:
+        if enable:
+            from cli.setup import enable_plugin_with_setup
+            if enable_plugin_with_setup(name, home):
+                return
         print(f"  Plugin '{name}' not found in config. Run 'clawquant config' to set it up.")
 
 

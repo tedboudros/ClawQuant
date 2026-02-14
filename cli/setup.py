@@ -17,7 +17,7 @@ from dotenv import dotenv_values
 from questionary import Choice
 
 from cli.banner import print_banner
-from cli.config_gen import generate_config
+from cli.config_gen import _add_plugin_to_config, generate_config
 from cli.scanner import (
     CATEGORY_LABELS,
     CATEGORY_ORDER,
@@ -150,6 +150,83 @@ def run_plugin_setup(plugin_name: str) -> None:
             display_v = "********" if any(f.key == k and f.type == "secret" for f in plugin.config_fields) else v
             print(f"    {k}: {display_v}")
         print(f"\n  Run 'clawquant config' to apply changes to your configuration.\n")
+
+
+def enable_plugin_with_setup(plugin_name: str, home_dir: Path | None = None) -> bool:
+    """Enable a plugin and persist config by walking through its setup prompts."""
+    from cli.scanner import get_plugin
+
+    plugin = get_plugin(plugin_name)
+    if not plugin:
+        print(f"  Unknown plugin: {plugin_name}")
+        print("  Run 'clawquant plugin list' to see available plugins.")
+        return False
+
+    if home_dir is None:
+        home_dir = Path.home() / ".clawquant"
+    home_dir = home_dir.expanduser()
+    home_dir.mkdir(parents=True, exist_ok=True)
+
+    all_plugins = discover_plugins()
+    existing_values = _load_existing_plugin_values(home_dir, all_plugins)
+    current_values = existing_values.get(plugin.name, {})
+
+    print_banner()
+    print(f"  Enabling and configuring: {plugin.display_name}\n")
+
+    values: dict[str, Any] = {}
+    if plugin.has_config:
+        configured = _configure_plugin(plugin, current_values)
+        if configured is None:
+            return False
+        values = configured
+
+    config_path = home_dir / "config.yaml"
+    env_path = home_dir / ".env"
+
+    config: dict[str, Any] = {}
+    if config_path.exists():
+        with open(config_path) as f:
+            config = yaml.safe_load(f) or {}
+
+    secrets: dict[str, str] = {}
+    _add_plugin_to_config(config, secrets, plugin, values)
+    _ensure_plugin_enabled(config, plugin)
+
+    with open(config_path, "w") as f:
+        f.write("# ClawQuant Configuration\n")
+        f.write("# Updated by clawquant plugin enable\n\n")
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+    existing_env = dotenv_values(env_path) if env_path.exists() else {}
+    env_out: dict[str, str] = {
+        str(k): str(v)
+        for k, v in existing_env.items()
+        if k and v is not None
+    }
+    env_out.update(secrets)
+    with open(env_path, "w") as f:
+        f.write("# ClawQuant Secrets\n")
+        f.write("# Updated by clawquant plugin enable\n")
+        f.write("# NEVER commit this file to git\n\n")
+        for key in sorted(env_out):
+            f.write(f"{key}={env_out[key]}\n")
+
+    if plugin.pip_dependencies:
+        print(f"  Installing plugin dependencies: {', '.join(plugin.pip_dependencies)}")
+        import subprocess
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", *plugin.pip_dependencies],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    print()
+    print(f"  Enabled: {plugin.name}")
+    print(f"  Config:  {config_path}")
+    print(f"  Secrets: {env_path}")
+    print()
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -442,3 +519,21 @@ def _load_existing_enabled_plugins(home_dir: Path) -> dict[str, set[str]]:
             out["integration"].add(name)
 
     return out
+
+
+def _ensure_plugin_enabled(config: dict[str, Any], plugin: PluginInfo) -> None:
+    """Set enabled=true for categories that support explicit enable flags."""
+    if plugin.category == "ai_provider":
+        providers = (config.get("ai") or {}).get("providers") or {}
+        entry = providers.get(plugin.name)
+        if isinstance(entry, dict):
+            entry["enabled"] = True
+    elif plugin.category == "market_data":
+        providers = (config.get("market_data") or {}).get("providers") or {}
+        entry = providers.get(plugin.name)
+        if isinstance(entry, dict):
+            entry["enabled"] = True
+    elif plugin.category == "integration":
+        entry = (config.get("integrations") or {}).get(plugin.name)
+        if isinstance(entry, dict):
+            entry["enabled"] = True
