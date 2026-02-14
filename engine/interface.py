@@ -57,6 +57,8 @@ IMPORTANT RULES:
 - Do not ask for extra confirmation ("ok?", "say do it", "should I proceed?") for routine user-requested actions.
 - For "stop/delete this task" requests, resolve the task via tools (list_tasks/delete_task_by_name/delete_task) and complete the deletion in the same turn when unambiguous.
 - Response contract for actionable requests: perform tools first, then respond with completed outcome and what changed.
+- Never expose internal tool protocol payloads in user-facing replies (for example: raw tool traces, `tool_call_id`, `image_url`, `base64_*`, or execution dumps).
+- Summarize tool outcomes in plain language unless the user explicitly asks for raw debug output.
 - Follow plugin-specific runtime instructions appended below this prompt when available (enabled plugins only).
 - You understand ANY language. Parse the user's intent regardless of what language they write in.
 - Be concise in responses. Don't over-explain.
@@ -319,16 +321,21 @@ class AIInterface:
                 raw_tool_result = str(await self._execute_tool(tool_name, args, source, channel_id))
                 summary_tool_result = self._summarize_tool_result_for_text(tool_name, raw_tool_result)
                 tool_results.append(f"[{tool_name}]: {summary_tool_result}")
+                tool_message_content = self._build_tool_message_content(
+                    tool_name=tool_name,
+                    raw_tool_result=raw_tool_result,
+                    summary_tool_result=summary_tool_result,
+                )
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
-                    "content": summary_tool_result,
+                    "content": tool_message_content,
                 })
                 if persist_intermediate_messages:
                     self._append_message(
                         channel_id=channel_id,
                         role="tool",
-                        content=summary_tool_result,
+                        content=tool_message_content,
                         tool_call_id=tool_call_id,
                     )
                 multimodal_followups.extend(
@@ -498,9 +505,32 @@ class AIInterface:
 
     @staticmethod
     def _extract_base64_data_url(tool_result: str) -> str | None:
+        text = (tool_result or "").strip()
+        if not text:
+            return None
+
+        # Preferred: structured JSON payload from tool output.
+        if text.startswith("{") and text.endswith("}"):
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                payload = None
+            if isinstance(payload, dict):
+                if payload.get("type") == "image_url":
+                    image_url = payload.get("image_url")
+                    if isinstance(image_url, dict):
+                        raw = str(image_url.get("url", "")).strip()
+                    else:
+                        raw = ""
+                else:
+                    raw = str(payload.get("base64_data_url", "")).strip()
+                if raw.startswith("data:image/") and ";base64," in raw:
+                    return raw
+
+        # Backward-compatible: parse line-based output.
         match = re.search(
             r"base64_data_url:\s*(data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+)",
-            tool_result,
+            text,
         )
         if not match:
             return None
@@ -511,17 +541,70 @@ class AIInterface:
         """Remove oversized payload lines from textual tool summaries."""
         if tool_name != "get_browser_screenshot":
             return tool_result
+        text = (tool_result or "").strip()
+        if text.startswith("{") and text.endswith("}"):
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                payload = None
+            if isinstance(payload, dict) and payload.get("type") == "image_url":
+                image_url = payload.get("image_url")
+                if isinstance(image_url, dict):
+                    url = str(image_url.get("url", "")).strip()
+                    if url.startswith("data:image/") and ";base64," in url:
+                        return "Screenshot captured.\nImage payload: attached for multimodal reasoning."
+
         lines = []
+        had_full_image_payload = False
+        had_truncated_image_payload = False
         for line in tool_result.splitlines():
             lowered = line.strip().lower()
             if lowered.startswith("base64_data_url:"):
-                lines.append("base64_data_url: [omitted from text summary; attached as image content]")
+                had_full_image_payload = True
+                continue
+            if lowered.startswith("base64_truncated: true"):
+                had_truncated_image_payload = True
+                continue
+            if lowered.startswith("base64_truncated: false"):
+                continue
+            if lowered.startswith("base64_chars_total:"):
+                continue
+            if lowered.startswith("base64_chars_returned:"):
                 continue
             if lowered.startswith("base64_preview:"):
-                lines.append("base64_preview: [omitted from text summary]")
+                had_truncated_image_payload = True
+                continue
+            if lowered.startswith("base64_note:"):
                 continue
             lines.append(line)
+        if had_full_image_payload:
+            lines.append("Image payload: attached for multimodal reasoning.")
+        elif had_truncated_image_payload:
+            lines.append("Image payload: unavailable (truncated). Increase max_base64_chars to attach.")
         return "\n".join(lines)
+
+    @staticmethod
+    def _build_tool_message_content(
+        tool_name: str,
+        raw_tool_result: str,
+        summary_tool_result: str,
+    ) -> Any:
+        """Construct provider-facing tool message content."""
+        if tool_name != "get_browser_screenshot":
+            return summary_tool_result
+
+        data_url = AIInterface._extract_base64_data_url(raw_tool_result)
+        if data_url:
+            return [{
+                "type": "image_url",
+                "image_url": {
+                    "url": data_url,
+                    "detail": "auto",
+                },
+            }]
+
+        # Fall back to raw payload if screenshot output is malformed.
+        return raw_tool_result
 
     def _build_tool_result_followup_messages(
         self,

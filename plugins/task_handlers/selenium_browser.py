@@ -13,12 +13,9 @@ import json
 import logging
 import os
 import re
-import tempfile
 import threading
 from contextlib import redirect_stdout
-from datetime import datetime, timezone
 from html.parser import HTMLParser
-from pathlib import Path
 from typing import Any
 
 from core.models.tasks import TaskResult
@@ -167,38 +164,6 @@ def _dedupe_links(values: list[tuple[str, str]], max_items: int) -> list[tuple[s
     return out
 
 
-def _parse_bool_arg(value: Any, default: bool) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    lowered = str(value).strip().lower()
-    if lowered in {"1", "true", "yes", "on"}:
-        return True
-    if lowered in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-
-def _parse_int_arg(
-    value: Any,
-    default: int,
-    minimum: int | None = None,
-    maximum: int | None = None,
-) -> int:
-    try:
-        out = int(value)
-    except Exception:
-        out = default
-    if minimum is not None:
-        out = max(minimum, out)
-    if maximum is not None:
-        out = min(maximum, out)
-    return out
-
-
 class SeleniumBrowserHandler:
     """Tool-hosting task handler for Selenium browser automation."""
 
@@ -214,7 +179,6 @@ class SeleniumBrowserHandler:
         self._page_code_max_chars = int(page_code_max_chars)
         self._driver: Any | None = None
         self._lock = threading.RLock()
-        self._screens_dir = Path(tempfile.gettempdir()) / "clawquant_screenshots"
         if not logins_b64:
             logins_b64 = os.environ.get("SELENIUM_LOGINS_B64", "")
         self._login_profiles = self._decode_login_profiles(logins_b64)
@@ -229,7 +193,6 @@ class SeleniumBrowserHandler:
             "Selenium Browser Playbook:\n"
             "- Work incrementally with many short tool calls, not one long script.\n"
             "- Before any browser interaction code, call get_browser_screenshot and get_page_code to inspect current UI state.\n"
-            "- If screenshot payload is truncated, call get_browser_screenshot again with higher max_base64_chars before deciding.\n"
             "- Use run_selenium_code for one small objective per call (single click, single fill, single submit, or single readback).\n"
             "- After each state-changing action, call get_browser_screenshot and get_page_code again to verify what changed.\n"
             "- Prioritize dismissing blockers first (cookie banners, modals, consent overlays, popups) before login/navigation actions.\n"
@@ -328,26 +291,9 @@ class SeleniumBrowserHandler:
                     "name": "get_browser_screenshot",
                     "description": (
                         "Capture current browser viewport screenshot. "
-                        "Returns saved file path and base64 image payload (data URL) for model context."
+                        "Returns only a single image_url payload with a base64 data URL."
                     ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "include_base64": {
-                                "type": "boolean",
-                                "default": True,
-                                "description": "Include base64 image payload in output (default: true).",
-                            },
-                            "max_base64_chars": {
-                                "type": "integer",
-                                "default": 500000,
-                                "description": (
-                                    "Max returned base64 characters when include_base64=true "
-                                    "(default 500000, increase if more image detail is needed)."
-                                ),
-                            },
-                        },
-                    },
+                    "parameters": {"type": "object", "properties": {}},
                 },
             },
             {
@@ -625,46 +571,20 @@ class SeleniumBrowserHandler:
             if self._driver is None:
                 return "No active browser session. Use open_browser first."
 
-            include_base64 = _parse_bool_arg(args.get("include_base64"), True)
-            max_b64 = _parse_int_arg(
-                args.get("max_base64_chars"),
-                default=500000,
-                minimum=1000,
-                maximum=2000000,
-            )
-
             try:
                 png_bytes = self._driver.get_screenshot_as_png()
             except Exception as exc:
                 return f"Failed to capture screenshot: {exc}"
 
-            self._screens_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            out_path = self._screens_dir / f"selenium_{stamp}.png"
-            out_path.write_bytes(png_bytes)
-
-            lines = [
-                f"Screenshot saved: {out_path}",
-                f"Bytes: {len(png_bytes)}",
-            ]
-            if include_base64:
-                encoded_full = base64.b64encode(png_bytes).decode("ascii")
-                full_len = len(encoded_full)
-                encoded = encoded_full
-                truncated = False
-                if full_len > max_b64:
-                    encoded = encoded_full[:max_b64]
-                    truncated = True
-                lines.append(f"base64_chars_total: {full_len}")
-                if truncated:
-                    lines.append(f"base64_chars_returned: {len(encoded)} (truncated)")
-                    lines.append("base64_truncated: true")
-                    lines.append("base64_preview: " + encoded + "...(truncated)")
-                    lines.append("base64_note: Increase max_base64_chars to include full image payload.")
-                else:
-                    lines.append("base64_truncated: false")
-                    lines.append(f"base64_data_url: data:image/png;base64,{encoded}")
-            return "\n".join(lines)
+            encoded = base64.b64encode(png_bytes).decode("ascii")
+            payload = {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{encoded}",
+                    "detail": "auto",
+                },
+            }
+            return json.dumps(payload, separators=(",", ":"))
 
     async def _tool_page_code(self, args: dict) -> str:
         return await asyncio.to_thread(self._page_code_sync, args)
