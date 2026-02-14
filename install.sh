@@ -71,6 +71,15 @@ else
     info "Cloning ClawQuant to $INSTALL_DIR..."
     git clone --quiet "$REPO" "$INSTALL_DIR"
     ok "Cloned successfully"
+
+    INSTALL_COMMIT="$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)"
+    if [ -n "$INSTALL_COMMIT" ]; then
+        {
+            echo "installed_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            echo "commit=$INSTALL_COMMIT"
+        } > "$INSTALL_DIR/.clawquant-install-meta"
+        ok "Recorded install commit: ${INSTALL_COMMIT:0:12}"
+    fi
 fi
 
 cd "$INSTALL_DIR"

@@ -17,9 +17,12 @@ clawquant setup
 What setup does today:
 - Discovers plugins from `PLUGIN_META`
 - Prompts for config fields
+- On first setup, asks whether startup auto-update should be enabled
 - Lets you skip sections if required fields already exist
+- Runs plugin-specific setup flows where needed (e.g., selenium saved login profiles)
 - Writes `config.yaml` and `.env`
 - Installs plugin-specific pip deps when required
+  - Optional heavy deps are only installed if that plugin is enabled
 
 Re-run full setup:
 
@@ -34,6 +37,14 @@ clawquant plugin enable <plugin_name>
 ```
 
 If plugin config is missing, `plugin enable` runs that plugin's setup flow and persists values.
+
+Manual update:
+
+```bash
+clawquant update
+```
+
+On successful manual or startup auto-update, `updates.install_commit` is rewritten to the current `HEAD`.
 
 ---
 
@@ -57,6 +68,7 @@ If plugin config is missing, `plugin enable` runs that plugin's setup flow and p
 - `notifications.send`
 - `comparison.weekly`
 - `web.search` (tool-oriented handler; scheduled run is `no_action`)
+- `browser.selenium` (optional, only when `selenium_browser` is enabled)
 
 ---
 
@@ -68,6 +80,10 @@ home_dir: ~/.clawquant
 server:
   host: 127.0.0.1
   port: 8321
+
+updates:
+  auto_update: true
+  install_commit: "3f2abcde1234567890fedcba0987654321abcd12"
 
 integrations:
   telegram:
@@ -152,6 +168,13 @@ scheduler:
   timezone: America/New_York
   check_interval: 60s
   default_tasks: []  # currently not auto-created by startup
+  handlers:
+    selenium_browser:
+      enabled: false
+      default_browser: chrome
+      headless: true
+      page_code_max_chars: 6000
+      logins_b64: ${SELENIUM_LOGINS_B64}
 
 logging:
   level: INFO
@@ -175,7 +198,17 @@ OPENROUTER_API_KEY=...
 
 # plugin tools
 SERPER_API_KEY=...
+SELENIUM_LOGINS_B64=...
 ```
+
+### Selenium Login Profiles
+
+When `selenium_browser` is enabled, setup includes an interactive credential-profile step.
+
+- Profiles are stored as secret env data (`SELENIUM_LOGINS_B64`).
+- AI can discover profile IDs via `list_saved_logins`.
+- During `run_selenium_code`, use helper `get_saved_login("<profile_id>")` to retrieve username/password.
+- Credentials are not intended to be echoed in normal assistant responses.
 
 ---
 

@@ -7,6 +7,8 @@ plugin file automatically makes it appear in the wizard.
 
 from __future__ import annotations
 
+import importlib
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -54,6 +56,22 @@ def run_setup(home_dir: Path | None = None) -> None:
         if home_str is None:
             _abort()
         home_dir = Path(home_str).expanduser()
+    home_dir = home_dir.expanduser()
+
+    first_setup = not (home_dir / "config.yaml").exists()
+    existing_auto_update, existing_install_commit = _load_existing_update_settings(home_dir)
+    install_commit = existing_install_commit or _detect_install_commit()
+
+    if first_setup:
+        auto_update = questionary.confirm(
+            "Enable automatic updates on startup? (runs `git pull` before `clawquant start`)",
+            default=True,
+            style=STYLE,
+        ).ask()
+        if auto_update is None:
+            _abort()
+    else:
+        auto_update = existing_auto_update
 
     # Step 2: Discover all available plugins
     all_plugins = discover_plugins()
@@ -64,9 +82,9 @@ def run_setup(home_dir: Path | None = None) -> None:
     enabled_plugins: list[PluginInfo] = []
     plugin_values: dict[str, dict[str, Any]] = {}
 
-    # Categories that require user selection (checkbox)
+    # Categories that require explicit selection
     selectable = ["ai_provider", "market_data", "integration"]
-    # Categories enabled by default (agents, risk rules, task handlers)
+    # Categories that are auto-enabled by default (unless plugin marks auto_enable=false)
     auto_enabled = ["agent", "risk_rule", "task_handler"]
 
     for category in CATEGORY_ORDER:
@@ -82,8 +100,30 @@ def run_setup(home_dir: Path | None = None) -> None:
             )
             enabled_plugins.extend(selected)
         elif category in auto_enabled:
-            # Auto-enable, but still let user configure
-            enabled_plugins.extend(plugins)
+            existing = existing_enabled.get(category, set())
+            has_existing = len(existing) > 0
+
+            # Auto-enable plugins marked auto_enable=true.
+            # If config already exists, honor existing enabled state.
+            auto_plugins: list[PluginInfo] = []
+            optional_plugins: list[PluginInfo] = []
+            for plugin in plugins:
+                if plugin.auto_enable:
+                    if not has_existing or plugin.name in existing:
+                        auto_plugins.append(plugin)
+                else:
+                    optional_plugins.append(plugin)
+
+            enabled_plugins.extend(auto_plugins)
+
+            # Optional plugins in auto categories are user-selectable.
+            if optional_plugins:
+                selected = _select_plugins(
+                    category,
+                    optional_plugins,
+                    existing_enabled.get(category, set()),
+                )
+                enabled_plugins.extend(selected)
 
     # Step 4: Configure each selected plugin
     print()
@@ -101,6 +141,8 @@ def run_setup(home_dir: Path | None = None) -> None:
         home_dir=home_dir,
         enabled_plugins=enabled_plugins,
         plugin_values=plugin_values,
+        auto_update=bool(auto_update),
+        install_commit=install_commit,
     )
 
     # Step 6: Install extra pip dependencies if any
@@ -283,6 +325,7 @@ def _configure_plugin(plugin: PluginInfo, existing: dict[str, Any] | None = None
     if not plugin.config_fields:
         return {}
     existing = existing or {}
+    visible_fields = [field for field in plugin.config_fields if not field.hidden]
 
     # Show setup instructions if present
     instructions = plugin.setup_instructions.strip()
@@ -293,7 +336,7 @@ def _configure_plugin(plugin: PluginInfo, existing: dict[str, Any] | None = None
         print()
 
     missing_required = [
-        field for field in plugin.config_fields
+        field for field in visible_fields
         if field.required and not _has_value(existing.get(field.key))
     ]
     can_skip = len(missing_required) == 0
@@ -318,13 +361,20 @@ def _configure_plugin(plugin: PluginInfo, existing: dict[str, Any] | None = None
 
     values: dict[str, Any] = {}
 
-    for field in plugin.config_fields:
+    for field in visible_fields:
         current = existing.get(field.key)
         value = _prompt_field(field, plugin.display_name, current=current)
         if value is None and _has_value(current):
             value = current
         if value is not None:
             values[field.key] = value
+
+    extra_values = _run_plugin_setup_hook(
+        plugin=plugin,
+        existing=existing,
+        values=values,
+    )
+    values.update(extra_values)
 
     return values
 
@@ -406,6 +456,58 @@ def _prompt_field(field: ConfigField, plugin_name: str, current: Any = None) -> 
             if value is None:
                 _abort()
             return value
+
+
+def _run_plugin_setup_hook(
+    plugin: PluginInfo,
+    existing: dict[str, Any],
+    values: dict[str, Any],
+) -> dict[str, Any]:
+    """Run optional plugin-defined setup hook and return extra field values."""
+    hook_name = plugin.setup_hook
+    if not hook_name:
+        return {}
+
+    try:
+        module = importlib.import_module(plugin.module_path)
+    except Exception:
+        print(f"  Warning: Could not import plugin module for setup hook: {plugin.module_path}")
+        return {}
+
+    hook = getattr(module, hook_name, None)
+    if not callable(hook):
+        print(f"  Warning: Setup hook '{hook_name}' not found for plugin {plugin.name}")
+        return {}
+
+    try:
+        result = hook(
+            existing_values=dict(existing),
+            current_values=dict(values),
+            style=STYLE,
+            abort_fn=_abort,
+        )
+    except TypeError:
+        # Backward compatibility for simpler hook signatures
+        try:
+            result = hook(dict(existing), dict(values))
+        except Exception:
+            print(f"  Warning: Setup hook failed for plugin {plugin.name}")
+            return {}
+    except Exception:
+        print(f"  Warning: Setup hook failed for plugin {plugin.name}")
+        return {}
+
+    if result is None:
+        return {}
+    if isinstance(result, dict):
+        return {
+            str(k): v
+            for k, v in result.items()
+            if v is not None
+        }
+
+    print(f"  Warning: Setup hook for plugin {plugin.name} returned unexpected value.")
+    return {}
 
 
 def _abort() -> None:
@@ -490,18 +592,14 @@ def _read_plugin_values_from_config(config: dict[str, Any], plugin: PluginInfo) 
 
 
 def _load_existing_enabled_plugins(home_dir: Path) -> dict[str, set[str]]:
-    """Load currently enabled plugin names by selectable category."""
+    """Load currently enabled plugin names by category."""
     config_path = home_dir / "config.yaml"
     config: dict[str, Any] = {}
     if config_path.exists():
         with open(config_path) as f:
             config = yaml.safe_load(f) or {}
 
-    out: dict[str, set[str]] = {
-        "ai_provider": set(),
-        "market_data": set(),
-        "integration": set(),
-    }
+    out: dict[str, set[str]] = {category: set() for category in CATEGORY_ORDER}
 
     ai_providers = ((config.get("ai") or {}).get("providers") or {})
     for name, cfg in ai_providers.items():
@@ -518,7 +616,88 @@ def _load_existing_enabled_plugins(home_dir: Path) -> dict[str, set[str]]:
         if not isinstance(cfg, dict) or cfg.get("enabled", True):
             out["integration"].add(name)
 
+    agents = ((config.get("ai") or {}).get("agents") or {})
+    for name, cfg in agents.items():
+        if not isinstance(cfg, dict) or cfg.get("enabled", True):
+            out["agent"].add(name)
+
+    rules = ((config.get("risk") or {}).get("rules") or {})
+    for name, cfg in rules.items():
+        if not isinstance(cfg, dict) or cfg.get("enabled", True):
+            out["risk_rule"].add(name)
+
+    handlers = ((config.get("scheduler") or {}).get("handlers") or {})
+    for name, cfg in handlers.items():
+        if not isinstance(cfg, dict) or cfg.get("enabled", True):
+            out["task_handler"].add(name)
+
     return out
+
+
+def _parse_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _load_existing_update_settings(home_dir: Path) -> tuple[bool, str]:
+    """Read existing updates settings from config if present."""
+    config_path = home_dir / "config.yaml"
+    if not config_path.exists():
+        return False, ""
+
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f) or {}
+    except Exception:
+        return False, ""
+
+    updates = config.get("updates")
+    if not isinstance(updates, dict):
+        return False, ""
+
+    auto_update = _parse_bool(updates.get("auto_update"), False)
+    install_commit = str(updates.get("install_commit", "") or "").strip()
+    return auto_update, install_commit
+
+
+def _detect_install_commit() -> str:
+    """Try to detect the current install commit hash."""
+    repo_root = Path(__file__).resolve().parent.parent
+
+    meta_path = repo_root / ".clawquant-install-meta"
+    if meta_path.exists():
+        try:
+            for line in meta_path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("commit="):
+                    commit = line.split("=", 1)[1].strip()
+                    if commit:
+                        return commit
+        except Exception:
+            pass
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return ""
+
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
 
 
 def _ensure_plugin_enabled(config: dict[str, Any], plugin: PluginInfo) -> None:
@@ -535,5 +714,17 @@ def _ensure_plugin_enabled(config: dict[str, Any], plugin: PluginInfo) -> None:
             entry["enabled"] = True
     elif plugin.category == "integration":
         entry = (config.get("integrations") or {}).get(plugin.name)
+        if isinstance(entry, dict):
+            entry["enabled"] = True
+    elif plugin.category == "task_handler":
+        entry = (((config.get("scheduler") or {}).get("handlers") or {}).get(plugin.name))
+        if isinstance(entry, dict):
+            entry["enabled"] = True
+    elif plugin.category == "agent":
+        entry = (((config.get("ai") or {}).get("agents") or {}).get(plugin.name))
+        if isinstance(entry, dict):
+            entry["enabled"] = True
+    elif plugin.category == "risk_rule":
+        entry = (((config.get("risk") or {}).get("rules") or {}).get(plugin.name))
         if isinstance(entry, dict):
             entry["enabled"] = True

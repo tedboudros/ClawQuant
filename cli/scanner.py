@@ -8,9 +8,9 @@ appears in the setup wizard and CLI.
 
 from __future__ import annotations
 
+import ast
 import importlib
 import logging
-import pkgutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -50,6 +50,7 @@ class ConfigField:
     placeholder: str = ""
     env_var: str | None = None
     choices: list[str] = field(default_factory=list)
+    hidden: bool = False
 
 
 @dataclass
@@ -65,7 +66,9 @@ class PluginInfo:
     module_path: str  # e.g., "plugins.integrations.telegram"
     pip_dependencies: list[str]
     setup_instructions: str
+    setup_hook: str | None
     config_fields: list[ConfigField]
+    auto_enable: bool = True
 
     @property
     def category_label(self) -> str:
@@ -116,20 +119,21 @@ def discover_plugins(plugins_dir: Path | None = None) -> dict[str, list[PluginIn
 
 
 def _load_plugin_meta(filepath: Path, plugins_root: Path) -> PluginInfo | None:
-    """Import a plugin file and extract its PLUGIN_META."""
+    """Extract PLUGIN_META from source (preferred) or module import (fallback)."""
     # Build module path: plugins/integrations/telegram.py -> plugins.integrations.telegram
     relative = filepath.relative_to(plugins_root.parent)
     module_path = str(relative.with_suffix("")).replace("/", ".").replace("\\", ".")
 
-    try:
-        module = importlib.import_module(module_path)
-    except Exception:
-        logger.debug("Could not import %s", module_path)
-        return None
-
-    meta = getattr(module, "PLUGIN_META", None)
-    if not meta or not isinstance(meta, dict):
-        return None
+    meta = _extract_plugin_meta_from_source(filepath)
+    if meta is None:
+        try:
+            module = importlib.import_module(module_path)
+            meta = getattr(module, "PLUGIN_META", None)
+        except Exception:
+            logger.debug("Could not import %s", module_path)
+            return None
+        if not meta or not isinstance(meta, dict):
+            return None
 
     # Parse config fields
     config_fields = []
@@ -144,6 +148,7 @@ def _load_plugin_meta(filepath: Path, plugins_root: Path) -> PluginInfo | None:
             placeholder=f.get("placeholder", ""),
             env_var=f.get("env_var"),
             choices=f.get("choices", []),
+            hidden=bool(f.get("hidden", False)),
         ))
 
     return PluginInfo(
@@ -156,8 +161,37 @@ def _load_plugin_meta(filepath: Path, plugins_root: Path) -> PluginInfo | None:
         module_path=module_path,
         pip_dependencies=meta.get("pip_dependencies", []),
         setup_instructions=meta.get("setup_instructions", ""),
+        setup_hook=meta.get("setup_hook"),
         config_fields=config_fields,
+        auto_enable=bool(meta.get("auto_enable", True)),
     )
+
+
+def _extract_plugin_meta_from_source(filepath: Path) -> dict[str, Any] | None:
+    """Parse module source and literal-evaluate PLUGIN_META without importing."""
+    try:
+        source = filepath.read_text(encoding="utf-8")
+    except Exception:
+        return None
+
+    try:
+        module_ast = ast.parse(source, filename=str(filepath))
+    except SyntaxError:
+        return None
+
+    for node in module_ast.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == "PLUGIN_META":
+                try:
+                    value = ast.literal_eval(node.value)
+                except Exception:
+                    return None
+                if isinstance(value, dict):
+                    return value
+                return None
+    return None
 
 
 def list_all_plugins(plugins_dir: Path | None = None) -> list[PluginInfo]:

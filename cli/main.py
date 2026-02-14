@@ -4,6 +4,7 @@ Usage:
     clawquant setup              Full interactive setup wizard
     clawquant start              Start the server
     clawquant status             Show system status
+    clawquant update             Pull latest code from GitHub
     clawquant config             Re-run the configuration wizard
     clawquant plugin list        List all available plugins
     clawquant plugin <name>      Configure a specific plugin
@@ -16,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,6 +25,143 @@ from pathlib import Path
 def get_home_dir() -> Path:
     """Get the ClawQuant home directory."""
     return Path(os.environ.get("CLAWQUANT_HOME", Path.home() / ".clawquant")).expanduser()
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _as_bool(value: object, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _load_update_preferences(config_path: Path) -> tuple[bool, str]:
+    """Read updates.auto_update and updates.install_commit from config.yaml."""
+    import yaml
+
+    if not config_path.exists():
+        return False, ""
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f) or {}
+    except Exception:
+        return False, ""
+
+    updates = config.get("updates")
+    if not isinstance(updates, dict):
+        return False, ""
+
+    auto_update = _as_bool(updates.get("auto_update"), False)
+    install_commit = str(updates.get("install_commit", "") or "").strip()
+    return auto_update, install_commit
+
+
+def _current_repo_commit(repo_root: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def _save_install_commit(config_path: Path, commit_hash: str) -> None:
+    if not commit_hash or not config_path.exists():
+        return
+
+    import yaml
+
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f) or {}
+    except Exception:
+        return
+
+    updates = config.get("updates")
+    if not isinstance(updates, dict):
+        updates = {}
+        config["updates"] = updates
+    updates["install_commit"] = commit_hash
+
+    try:
+        with open(config_path, "w") as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    except Exception:
+        return
+
+
+def _run_repo_update(
+    repo_root: Path,
+    refresh_dependencies: bool = True,
+    config_path: Path | None = None,
+) -> bool:
+    """Pull latest code and optionally refresh dependencies."""
+    if not (repo_root / ".git").exists():
+        print(f"  Not a git checkout: {repo_root}")
+        print("  Reinstall with the one-line installer, or update manually.")
+        return False
+
+    try:
+        result = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        print("  git is not installed or not available on PATH.")
+        return False
+
+    if result.returncode != 0:
+        print("  Update failed.")
+        err = (result.stderr or result.stdout).strip()
+        if err:
+            print(f"  {err}")
+        print("  Resolve local git conflicts/changes, then retry.")
+        return False
+
+    out = result.stdout.strip()
+    if out:
+        print(out)
+    else:
+        print("  Updated repository.")
+
+    commit_hash = _current_repo_commit(repo_root)
+    if config_path is not None and commit_hash:
+        _save_install_commit(config_path, commit_hash)
+        print(f"  Recorded install commit: {commit_hash[:12]}")
+
+    if not refresh_dependencies:
+        return True
+
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--quiet", "-r", "requirements.txt"],
+            cwd=repo_root,
+        )
+        print("  Dependencies refreshed.")
+    except subprocess.CalledProcessError:
+        print("  Repository updated, but dependency refresh failed.")
+        print("  Run: pip install -r requirements.txt")
+        return False
+    return True
 
 
 def cmd_setup(args: argparse.Namespace) -> None:
@@ -34,13 +173,20 @@ def cmd_setup(args: argparse.Namespace) -> None:
 
 def cmd_start(args: argparse.Namespace) -> None:
     """Start the ClawQuant server."""
-    from main import run, setup_logging
-    setup_logging("INFO")
-
     config_path = get_home_dir() / "config.yaml"
     if not config_path.exists():
         print("  No configuration found. Run 'clawquant setup' first.")
         sys.exit(1)
+
+    auto_update, _install_commit = _load_update_preferences(config_path)
+    if auto_update:
+        print("  Auto-update is enabled. Checking for updates...")
+        _run_repo_update(_repo_root(), refresh_dependencies=True, config_path=config_path)
+    else:
+        print("  Auto-update is disabled. Run 'clawquant update' to pull latest changes.")
+
+    from main import run, setup_logging
+    setup_logging("INFO")
 
     try:
         asyncio.run(run(config_path=str(config_path)))
@@ -95,6 +241,12 @@ def cmd_config(args: argparse.Namespace) -> None:
     run_setup(home_dir=get_home_dir())
 
 
+def cmd_update(args: argparse.Namespace) -> None:
+    """Update local installation from GitHub using git pull."""
+    config_path = get_home_dir() / "config.yaml"
+    _run_repo_update(_repo_root(), refresh_dependencies=True, config_path=config_path)
+
+
 def cmd_plugin(args: argparse.Namespace) -> None:
     """Plugin management commands."""
     action = args.plugin_action
@@ -143,29 +295,50 @@ def _plugin_toggle(name: str | None, enable: bool) -> None:
     with open(config_path) as f:
         config = yaml.safe_load(f) or {}
 
-    # Try to find the plugin in various config sections
-    sections = ["integrations", "ai"]
+    def _enable_flag(entry: object) -> bool:
+        if isinstance(entry, dict):
+            entry["enabled"] = enable
+            return True
+        return False
+
     found = False
 
-    for section in sections:
-        if section in config:
-            sec = config[section]
-            if isinstance(sec, dict):
-                # Check direct keys
-                if name in sec:
-                    if isinstance(sec[name], dict):
-                        sec[name]["enabled"] = enable
-                        found = True
-                # Check providers sub-dict
-                if "providers" in sec and isinstance(sec["providers"], dict):
-                    if name in sec["providers"]:
-                        sec["providers"][name]["enabled"] = enable
-                        found = True
+    # integrations.<name>
+    integrations = config.get("integrations")
+    if isinstance(integrations, dict) and name in integrations:
+        found = _enable_flag(integrations.get(name)) or found
 
-    if "market_data" in config and "providers" in config["market_data"]:
-        if name in config["market_data"]["providers"]:
-            config["market_data"]["providers"][name]["enabled"] = enable
-            found = True
+    # ai.providers.<name>
+    ai = config.get("ai")
+    if isinstance(ai, dict):
+        providers = ai.get("providers")
+        if isinstance(providers, dict) and name in providers:
+            found = _enable_flag(providers.get(name)) or found
+
+        agents = ai.get("agents")
+        if isinstance(agents, dict) and name in agents:
+            found = _enable_flag(agents.get(name)) or found
+
+    # market_data.providers.<name>
+    market_data = config.get("market_data")
+    if isinstance(market_data, dict):
+        providers = market_data.get("providers")
+        if isinstance(providers, dict) and name in providers:
+            found = _enable_flag(providers.get(name)) or found
+
+    # risk.rules.<name>
+    risk = config.get("risk")
+    if isinstance(risk, dict):
+        rules = risk.get("rules")
+        if isinstance(rules, dict) and name in rules:
+            found = _enable_flag(rules.get(name)) or found
+
+    # scheduler.handlers.<name>
+    scheduler = config.get("scheduler")
+    if isinstance(scheduler, dict):
+        handlers = scheduler.get("handlers")
+        if isinstance(handlers, dict) and name in handlers:
+            found = _enable_flag(handlers.get(name)) or found
 
     if found:
         with open(config_path, "w") as f:
@@ -198,6 +371,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # status
     sub.add_parser("status", help="Show system status")
+
+    # update
+    sub.add_parser("update", help="Pull latest code from GitHub and refresh dependencies")
 
     # config
     sub.add_parser("config", help="Re-run the configuration wizard")
@@ -233,6 +409,7 @@ def main() -> None:
         "setup": cmd_setup,
         "start": cmd_start,
         "status": cmd_status,
+        "update": cmd_update,
         "config": cmd_config,
         "plugin": cmd_plugin,
     }

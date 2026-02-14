@@ -23,6 +23,8 @@ def generate_config(
     plugin_values: dict[str, dict[str, Any]],
     server_host: str = "127.0.0.1",
     server_port: int = 8321,
+    auto_update: bool = False,
+    install_commit: str = "",
 ) -> tuple[Path, Path]:
     """Generate config.yaml and .env files from setup wizard results.
 
@@ -32,6 +34,8 @@ def generate_config(
         plugin_values: {plugin_name: {field_key: value}} for each plugin
         server_host: HTTP server bind host
         server_port: HTTP server bind port
+        auto_update: Whether startup auto-update is enabled
+        install_commit: Commit hash recorded at first setup/install
 
     Returns:
         Tuple of (config_path, env_path)
@@ -43,6 +47,10 @@ def generate_config(
 
     config["home_dir"] = str(home_dir)
     config["server"] = {"host": server_host, "port": server_port}
+    config["updates"] = {
+        "auto_update": bool(auto_update),
+        "install_commit": str(install_commit or ""),
+    }
 
     # Group plugins by category and build config sections
     for plugin in enabled_plugins:
@@ -81,17 +89,7 @@ def _add_plugin_to_config(
     """Add a plugin's configuration to the config dict and secrets dict."""
     category = plugin.category
 
-    # Map category to config section
-    section_map = {
-        "ai_provider": "ai",
-        "market_data": "market_data",
-        "integration": "integrations",
-        "agent": "ai",
-        "risk_rule": "risk",
-        "task_handler": "scheduler",
-    }
-    section = section_map.get(category, category)
-
+    resolved_values: dict[str, Any] = {}
     for field in plugin.config_fields:
         value = values.get(field.key, field.default)
         if value is None:
@@ -100,7 +98,8 @@ def _add_plugin_to_config(
         if field.type == "secret" and field.env_var:
             # Secrets go to .env, config.yaml gets ${ENV_VAR} reference
             secrets[field.env_var] = str(value)
-            value = f"${{{field.env_var}}}"
+            resolved_values[field.key] = f"${{{field.env_var}}}"
+            continue
 
         if field.type == "number" and isinstance(value, str):
             try:
@@ -109,27 +108,17 @@ def _add_plugin_to_config(
                     value = int(value)
             except ValueError:
                 pass
+        resolved_values[field.key] = value
 
     # Build the config structure based on category
     if category == "ai_provider":
         providers = config.setdefault("ai", {}).setdefault("providers", {})
         provider_config: dict[str, Any] = {"enabled": True}
         for field in plugin.config_fields:
-            val = values.get(field.key, field.default)
+            val = resolved_values.get(field.key)
             if val is None:
                 continue
-            if field.type == "secret" and field.env_var:
-                provider_config[field.key] = f"${{{field.env_var}}}"
-            elif field.type == "number":
-                try:
-                    val = float(val)
-                    if val == int(val):
-                        val = int(val)
-                except (ValueError, TypeError):
-                    pass
-                provider_config[field.key] = val
-            else:
-                provider_config[field.key] = val
+            provider_config[field.key] = val
         providers[plugin.name] = provider_config
 
         # Set first provider as default if not already set
@@ -140,7 +129,7 @@ def _add_plugin_to_config(
         md = config.setdefault("market_data", {}).setdefault("providers", {})
         provider_config = {"enabled": True}
         for field in plugin.config_fields:
-            val = values.get(field.key, field.default)
+            val = resolved_values.get(field.key)
             if val is not None:
                 provider_config[field.key] = val
         md[plugin.name] = provider_config
@@ -151,12 +140,10 @@ def _add_plugin_to_config(
         channels: list[dict] = []
         channel: dict[str, Any] = {}
         for field in plugin.config_fields:
-            val = values.get(field.key, field.default)
+            val = resolved_values.get(field.key)
             if val is None:
                 continue
-            if field.type == "secret" and field.env_var:
-                integ_config[field.key] = f"${{{field.env_var}}}"
-            elif field.key in ("chat_id", "direction"):
+            if field.key in ("chat_id", "direction"):
                 channel[field.key] = val
             else:
                 integ_config[field.key] = val
@@ -169,25 +156,18 @@ def _add_plugin_to_config(
 
     elif category == "risk_rule":
         rules = config.setdefault("risk", {}).setdefault("rules", {})
-        rule_config: dict[str, Any] = {}
+        rule_config: dict[str, Any] = {"enabled": True}
         for field in plugin.config_fields:
-            val = values.get(field.key, field.default)
+            val = resolved_values.get(field.key)
             if val is not None:
-                if field.type == "number":
-                    try:
-                        val = float(val)
-                        if val == int(val):
-                            val = int(val)
-                    except (ValueError, TypeError):
-                        pass
                 rule_config[field.key] = val
         rules[plugin.name] = rule_config
 
     elif category == "task_handler":
         tasks = config.setdefault("scheduler", {}).setdefault("handlers", {})
-        handler_config: dict[str, Any] = {}
+        handler_config: dict[str, Any] = {"enabled": True}
         for field in plugin.config_fields:
-            val = values.get(field.key, field.default)
+            val = resolved_values.get(field.key)
             if val is not None:
                 handler_config[field.key] = val
         tasks[plugin.name] = handler_config

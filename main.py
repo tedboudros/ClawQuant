@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
+import inspect
 import logging
 
 from aiohttp import web
@@ -178,40 +180,141 @@ async def _load_plugins(config, bus, store, registry, ai_interface: AIInterface)
     except Exception as e:
         logger.error("Failed to load risk rules: %s", e)
 
-    # 5. Load task handlers
-    try:
-        from plugins.task_handlers.ai_runner import AIRunnerHandler
-        from plugins.task_handlers.comparison import ComparisonHandler
-        from plugins.task_handlers.news import NewsBriefHandler
-        from plugins.task_handlers.notifications import NotificationsHandler
-        from plugins.task_handlers.web_search import WebSearchHandler
+    # 5. Load task handlers (fully metadata-driven)
+    handler_cfg = config.scheduler.handlers or {}
 
-        ai_runner_handler = AIRunnerHandler(ai_interface=ai_interface, bus=bus)
-        registry.register("task_handler", ai_runner_handler)
-        logger.info("Loaded task handler: %s", ai_runner_handler.name)
+    def _as_bool(value: object, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        lowered = str(value).strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        return default
 
-        handler = ComparisonHandler(
-            store=store,
-            bus=bus,
-            registry=registry,
-            min_outcome_days=_days_from_period(config.learning.min_outcome_period),
+    def _handler_enabled(plugin_name: str, default: bool) -> bool:
+        cfg = handler_cfg.get(plugin_name)
+        if cfg is None:
+            return default
+        if isinstance(cfg, dict):
+            return _as_bool(cfg.get("enabled"), default)
+        return _as_bool(cfg, default)
+
+    def _handler_settings(plugin_name: str) -> dict:
+        cfg = handler_cfg.get(plugin_name)
+        if not isinstance(cfg, dict):
+            return {}
+        return {k: v for k, v in cfg.items() if k != "enabled"}
+
+    def _coerce_setting(value: object, field_type: str) -> object:
+        if field_type == "boolean":
+            return _as_bool(value, False)
+        if field_type == "number":
+            if isinstance(value, str):
+                try:
+                    num = float(value)
+                except ValueError:
+                    return value
+                return int(num) if num == int(num) else num
+        if field_type == "list" and isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return value
+
+    def _coerce_handler_settings(plugin, settings: dict) -> dict:
+        field_types = {field.key: field.type for field in plugin.config_fields}
+        out: dict[str, object] = {}
+        for key, value in settings.items():
+            field_type = field_types.get(key)
+            if field_type is None:
+                out[key] = value
+                continue
+            out[key] = _coerce_setting(value, field_type)
+        return out
+
+    def _build_handler_kwargs(handler_cls: type, settings: dict) -> dict:
+        dependency_map = {
+            "ai_interface": ai_interface,
+            "bus": bus,
+            "store": store,
+            "registry": registry,
+        }
+        sig = inspect.signature(handler_cls.__init__)
+        kwargs: dict[str, object] = {}
+        missing: list[str] = []
+        used_settings: set[str] = set()
+        accepts_kwargs = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in sig.parameters.values()
         )
-        registry.register("task_handler", handler)
-        logger.info("Loaded task handler: %s", handler.name)
 
-        notifications_handler = NotificationsHandler(bus=bus)
-        registry.register("task_handler", notifications_handler)
-        logger.info("Loaded task handler: %s", notifications_handler.name)
+        for name, param in sig.parameters.items():
+            if name == "self":
+                continue
+            if param.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}:
+                continue
 
-        news_handler = NewsBriefHandler(registry=registry, bus=bus)
-        registry.register("task_handler", news_handler)
-        logger.info("Loaded task handler: %s", news_handler.name)
+            if name in dependency_map:
+                kwargs[name] = dependency_map[name]
+                continue
+            if name in settings:
+                kwargs[name] = settings[name]
+                used_settings.add(name)
+                continue
 
-        web_search_handler = WebSearchHandler()
-        registry.register("task_handler", web_search_handler)
-        logger.info("Loaded task handler: %s", web_search_handler.name)
-    except Exception as e:
-        logger.error("Failed to load task handlers: %s", e)
+            if param.default is inspect.Parameter.empty:
+                missing.append(name)
+
+        if missing:
+            raise TypeError(
+                f"Missing required constructor args: {', '.join(missing)}"
+            )
+
+        if accepts_kwargs:
+            for key, value in settings.items():
+                if key not in used_settings:
+                    kwargs[key] = value
+
+        return kwargs
+
+    from cli.scanner import list_all_plugins
+
+    task_plugins = sorted(
+        [plugin for plugin in list_all_plugins() if plugin.category == "task_handler"],
+        key=lambda p: p.name,
+    )
+
+    for plugin in task_plugins:
+        enabled = _handler_enabled(plugin.name, plugin.auto_enable)
+        if not enabled:
+            continue
+
+        if not plugin.class_name:
+            logger.error("Task handler plugin %s missing class_name in PLUGIN_META", plugin.name)
+            continue
+
+        try:
+            module = importlib.import_module(plugin.module_path)
+            handler_cls = getattr(module, plugin.class_name, None)
+            if handler_cls is None:
+                logger.error(
+                    "Task handler plugin %s class '%s' not found",
+                    plugin.name,
+                    plugin.class_name,
+                )
+                continue
+
+            settings = _coerce_handler_settings(plugin, _handler_settings(plugin.name))
+            kwargs = _build_handler_kwargs(handler_cls, settings)
+            instance = handler_cls(**kwargs)
+            registry.register("task_handler", instance)
+            logger.info("Loaded task handler: %s", instance.name)
+        except Exception as e:
+            logger.error("Failed to load task handler %s: %s", plugin.name, e)
 
     # 6. Load integrations (and start them)
     for integration_name, integration_config in config.integrations.items():

@@ -56,6 +56,14 @@ IMPORTANT RULES:
 - Do not ask for extra confirmation ("ok?", "say do it", "should I proceed?") for routine user-requested actions.
 - For "stop/delete this task" requests, resolve the task via tools (list_tasks/delete_task_by_name/delete_task) and complete the deletion in the same turn when unambiguous.
 - Response contract for actionable requests: perform tools first, then respond with completed outcome and what changed.
+- Selenium/login safety workflow (when selenium tools are available):
+  - Never ask users to paste credentials into chat for website logins.
+  - First call `list_saved_logins` to discover available credential profile IDs.
+  - Choose the appropriate profile ID, then use `run_selenium_code`.
+  - Inside `run_selenium_code`, use helper `get_saved_login("<profile_id>")` to retrieve username/password during execution.
+  - Do not print, echo, summarize, or restate credentials in any response.
+  - Do not store credentials in tasks, notes, or message history.
+  - If no matching login profile exists, ask the user to configure selenium saved logins via plugin setup.
 - You understand ANY language. Parse the user's intent regardless of what language they write in.
 - Be concise in responses. Don't over-explain.
 - If you're unsure what the user wants, ask for clarification.
@@ -67,6 +75,7 @@ Execution rules:
 - Execute the task objective now using available tools.
 - Do not create/modify/delete tasks unless the prompt explicitly asks you to manage schedules.
 - For news/research requests, call relevant tools before saying data is unavailable.
+- For selenium login automation, use saved-login workflow (`list_saved_logins`, then `get_saved_login` inside run_selenium_code) and never echo credentials.
 - Respond with only the current run update for the user."""
 
 FIRST_CHAT_ONBOARDING_DIRECTIVE = """[INTERNAL ONBOARDING DIRECTIVE]

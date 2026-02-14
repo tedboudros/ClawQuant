@@ -23,9 +23,11 @@ curl -fsSL https://raw.githubusercontent.com/tedboudros/ClawQuant/main/install.s
 - **Built-in schedulers/handlers**: `ai.run_prompt`, `news.briefing`, `notifications.send`, `comparison.weekly`.
 - **Plugin-defined AI tools**: plugins can register tools dynamically (`get_tools` / `call_tool`).
 - **News + web browsing tools**: `get_news` and `web_search` (Serper-backed, optional `as_of` cutoff).
+- **Optional Selenium browser plugin**: exposes `open_browser`, `close_browser`, `list_saved_logins`, `run_selenium_code`, `get_browser_screenshot`, and `get_page_code`, with setup-managed saved login profiles.
 - **Persistent conversation memory**: chat history is stored in SQLite (`conversation_messages`) and reused by scheduler runs.
 - **One-time onboarding directive**: first user message persists an internal onboarding directive merged with the initial message.
 - **Event-bus output dispatch**: all outbound text routes through `integration.output` and adapter-specific dispatch.
+- **Plugin-scoped dependency installs**: heavy modules (like Selenium) are installed only when that plugin is enabled.
 
 ## Coming Soon (Documented Target-State, Not Fully Wired Yet)
 
@@ -84,10 +86,13 @@ Run `clawquant setup` for first-time setup, or `clawquant config` to re-run it. 
 - `~/.clawquant/config.yaml`
 - `~/.clawquant/.env`
 
+On first setup, it also asks whether to enable startup auto-updates (`git pull` before `clawquant start`).
+
 Useful commands:
 
 ```bash
 clawquant status              # show system status
+clawquant update              # pull latest code from GitHub + refresh deps
 clawquant plugin list         # list available plugins
 clawquant plugin <name>       # inspect/configure one plugin
 clawquant plugin enable <n>   # enable plugin (runs setup flow if missing config)

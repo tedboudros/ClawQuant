@@ -13,6 +13,18 @@ from core.models.tasks import TaskResult
 
 logger = logging.getLogger(__name__)
 
+PLUGIN_META = {
+    "name": "notifications",
+    "display_name": "Notifications",
+    "description": "Send scheduled plain-text messages to configured integrations",
+    "category": "task_handler",
+    "protocols": ["task_handler"],
+    "class_name": "NotificationsHandler",
+    "pip_dependencies": [],
+    "setup_instructions": "Use handler name 'notifications.send' with params.message and optional channel_id/adapter.",
+    "config_fields": [],
+}
+
 
 class NotificationsHandler:
     """Send scheduled notification messages to output adapters."""

@@ -98,6 +98,7 @@ graph TB
   - `news.briefing`
   - `notifications.send`
   - `web.search`
+  - `browser.selenium` (optional, loaded only when `selenium_browser` is enabled)
 
 Risk rules are loaded and registered, but risk-gating events are part of the target-state pipeline (see below).
 
@@ -133,6 +134,9 @@ Plugins can add tool schemas and execution handlers dynamically via:
 Current plugin tools include:
 - `get_news` (news plugin)
 - `web_search` (web search plugin)
+- `open_browser` / `close_browser` / `list_saved_logins` / `run_selenium_code` / `get_browser_screenshot` / `get_page_code` (optional selenium browser plugin)
+
+For selenium login flows, `run_selenium_code` provides helper `get_saved_login("<profile_id>")`.
 
 ### Tool-loop behavior
 

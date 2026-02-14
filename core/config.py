@@ -107,12 +107,18 @@ class SchedulerConfig(BaseModel):
     timezone: str = "America/New_York"
     check_interval: str = "60s"
     default_tasks: list[dict] = Field(default_factory=list)
+    handlers: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     audit_events: bool = True
     llm_calls: bool = True
+
+
+class UpdatesConfig(BaseModel):
+    auto_update: bool = False
+    install_commit: str = ""
 
 
 class AppConfig(BaseModel):
@@ -128,6 +134,7 @@ class AppConfig(BaseModel):
     learning: LearningConfig = Field(default_factory=LearningConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    updates: UpdatesConfig = Field(default_factory=UpdatesConfig)
 
     @property
     def home_path(self) -> Path:

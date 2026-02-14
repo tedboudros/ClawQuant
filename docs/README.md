@@ -30,6 +30,7 @@ This docs set now separates:
 - AI interface with multi-step tool-calling loop
 - Built-in tools for portfolio/trade/tasks/memories/signals/analysis trigger
 - Plugin-defined tools (`get_tools` / `call_tool`) including `get_news` and `web_search`
+- Optional Selenium browser tools via `selenium_browser` plugin (`open_browser`, `list_saved_logins`, `run_selenium_code`, etc.)
 - Scheduler with task handlers: `ai.run_prompt`, `news.briefing`, `notifications.send`, `comparison.weekly`
 - Event-bus output dispatch through `integration.output`
 - SQLite conversation persistence and first-turn onboarding directive persistence
