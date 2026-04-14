@@ -424,6 +424,7 @@ async def run(config_path: str | None = None, env_path: str | None = None) -> No
         bus=bus,
         registry=registry,
         check_interval=check_interval,
+        timezone_name=config.scheduler.timezone,
     )
     portfolio = PortfolioTracker(store=store)
     ai_interface = AIInterface(
