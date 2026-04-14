@@ -136,7 +136,7 @@ pip_output=$(.venv/bin/pip install --trusted-host pypi.org --trusted-host pypi.p
     fi
 }
 
-.venv/bin/pip install --quiet questionary 2>/dev/null || true
+.venv/bin/pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org --quiet questionary 2>/dev/null || true
 ok "Dependencies installed"
 
 # -------------------------------------------------------------------

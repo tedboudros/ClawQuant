@@ -153,7 +153,11 @@ def _run_repo_update(
 
     try:
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--quiet", "-r", "requirements.txt"],
+            [sys.executable, "-m", "pip", "install", "--quiet",
+             "--trusted-host", "pypi.org",
+             "--trusted-host", "pypi.python.org",
+             "--trusted-host", "files.pythonhosted.org",
+             "-r", "requirements.txt"],
             cwd=repo_root,
         )
         print("  Dependencies refreshed.")

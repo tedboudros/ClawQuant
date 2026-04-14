@@ -151,7 +151,11 @@ def run_setup(home_dir: Path | None = None) -> None:
         print(f"  Installing plugin dependencies: {', '.join(extra_deps)}")
         import subprocess
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", *extra_deps],
+            [sys.executable, "-m", "pip", "install",
+             "--trusted-host", "pypi.org",
+             "--trusted-host", "pypi.python.org",
+             "--trusted-host", "files.pythonhosted.org",
+             *extra_deps],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -256,7 +260,11 @@ def enable_plugin_with_setup(plugin_name: str, home_dir: Path | None = None) -> 
         print(f"  Installing plugin dependencies: {', '.join(plugin.pip_dependencies)}")
         import subprocess
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", *plugin.pip_dependencies],
+            [sys.executable, "-m", "pip", "install",
+             "--trusted-host", "pypi.org",
+             "--trusted-host", "pypi.python.org",
+             "--trusted-host", "files.pythonhosted.org",
+             *plugin.pip_dependencies],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
