@@ -38,23 +38,37 @@ echo ""
 info "Checking Python..."
 
 PYTHON=""
+FOUND_VERSION=""
 for cmd in python3.13 python3.12 python3 python; do
     if command -v "$cmd" &>/dev/null; then
-        version=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
+        version=$("$cmd" -c "import sys; print('{}.{}'.format(sys.version_info.major, sys.version_info.minor))" 2>/dev/null || true)
+        if [ -z "$version" ]; then
+            continue
+        fi
         major=$(echo "$version" | cut -d. -f1)
         minor=$(echo "$version" | cut -d. -f2)
         if [ "$major" -ge 3 ] && [ "$minor" -ge 11 ]; then
             PYTHON="$cmd"
             break
         fi
+        if [ -z "$FOUND_VERSION" ] && [ "$major" -ge 3 ]; then
+            FOUND_VERSION="$version"
+        fi
     fi
 done
 
 if [ -z "$PYTHON" ]; then
-    fail "Python 3.11+ is required but not found. Install it first:
+    if [ -n "$FOUND_VERSION" ]; then
+        fail "Python 3.11+ is required, but only Python $FOUND_VERSION was found. Install a newer version:
     macOS: brew install python@3.12
     Ubuntu: sudo apt install python3.12 python3.12-venv
     Other: https://www.python.org/downloads/"
+    else
+        fail "Python 3.11+ is required but not found. Install it first:
+    macOS: brew install python@3.12
+    Ubuntu: sudo apt install python3.12 python3.12-venv
+    Other: https://www.python.org/downloads/"
+    fi
 fi
 
 ok "Found $($PYTHON --version)"
@@ -99,9 +113,30 @@ fi
 # Step 4: Install dependencies
 # -------------------------------------------------------------------
 info "Installing dependencies..."
-.venv/bin/pip install --quiet --upgrade pip
-.venv/bin/pip install --quiet -r requirements.txt
-.venv/bin/pip install --quiet questionary
+
+pip_output=$(.venv/bin/pip install --upgrade pip 2>&1) || {
+    if echo "$pip_output" | grep -qi "SSL\|certificate"; then
+        fail "SSL certificate error — your system's certificates are outdated.
+    Fix with:  brew install ca-certificates && brew reinstall python@3.12
+    Then re-run this installer."
+    else
+        echo "$pip_output"
+        fail "Failed to upgrade pip. See output above."
+    fi
+}
+
+pip_output=$(.venv/bin/pip install -r requirements.txt 2>&1) || {
+    if echo "$pip_output" | grep -qi "SSL\|certificate"; then
+        fail "SSL certificate error — your system's certificates are outdated.
+    Fix with:  brew install ca-certificates && brew reinstall python@3.12
+    Then re-run this installer."
+    else
+        echo "$pip_output"
+        fail "Failed to install dependencies. See output above."
+    fi
+}
+
+.venv/bin/pip install --quiet questionary 2>/dev/null || true
 ok "Dependencies installed"
 
 # -------------------------------------------------------------------
