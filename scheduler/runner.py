@@ -47,8 +47,17 @@ class Scheduler:
         self._registry = registry
         self._check_interval = check_interval
         self._tz = ZoneInfo(timezone_name)
+        self._tz_name = timezone_name
         self._running = False
         self._task: asyncio.Task | None = None
+
+    @property
+    def tz(self) -> ZoneInfo:
+        return self._tz
+
+    @property
+    def tz_name(self) -> str:
+        return self._tz_name
 
     async def start(self) -> None:
         """Start the scheduler loop."""

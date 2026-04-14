@@ -250,7 +250,12 @@ class AIInterface:
 
     def _build_system_prompt(self, scheduled: bool) -> str:
         """Assemble base prompt + plugin-provided instruction sections."""
+        now = datetime.now(self._scheduler.tz)
+        time_line = f"Current date/time: {now.strftime('%A, %B %d, %Y %I:%M %p')} ({self._scheduler.tz_name})"
+
         base = SYSTEM_PROMPT if not scheduled else f"{SYSTEM_PROMPT}\n\n{SCHEDULED_RUN_PROMPT}"
+        base = f"{base}\n\n{time_line}"
+
         sections = self._collect_plugin_prompt_sections(scheduled=scheduled)
         if not sections:
             return base
