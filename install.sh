@@ -114,7 +114,7 @@ fi
 # -------------------------------------------------------------------
 info "Installing dependencies..."
 
-pip_output=$(.venv/bin/pip install --upgrade pip 2>&1) || {
+pip_output=$(.venv/bin/pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org --upgrade pip 2>&1) || {
     if echo "$pip_output" | grep -qi "SSL\|certificate"; then
         fail "SSL certificate error — your system's certificates are outdated.
     Fix with:  brew install ca-certificates && brew reinstall python@3.12
@@ -125,7 +125,7 @@ pip_output=$(.venv/bin/pip install --upgrade pip 2>&1) || {
     fi
 }
 
-pip_output=$(.venv/bin/pip install -r requirements.txt 2>&1) || {
+pip_output=$(.venv/bin/pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r requirements.txt 2>&1) || {
     if echo "$pip_output" | grep -qi "SSL\|certificate"; then
         fail "SSL certificate error — your system's certificates are outdated.
     Fix with:  brew install ca-certificates && brew reinstall python@3.12
