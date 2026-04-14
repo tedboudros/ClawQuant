@@ -18,6 +18,7 @@ from typing import Any
 
 from core.bus import AsyncIOBus
 from core.data.store import Store
+from core.llm_output import strip_no_reply_sentinel
 from core.models.events import Event, EventTypes
 from core.models.memories import Memory
 from core.models.signals import Position, Signal
@@ -71,7 +72,8 @@ Execution rules:
 - Do not create/modify/delete tasks unless the prompt explicitly asks you to manage schedules.
 - For news/research requests, call relevant tools before saying data is unavailable.
 - Follow plugin-specific runtime instructions appended below this prompt when available (enabled plugins only).
-- Respond with only the current run update for the user."""
+- Respond with only the current run update for the user.
+- If after executing tools you determine there is nothing meaningful to report (no changes, no alerts, nothing noteworthy), respond with exactly [NO_REPLY_TO_HUMAN] and nothing else. This suppresses delivery to the user. Only use this when there is genuinely nothing to communicate."""
 
 FIRST_CHAT_ONBOARDING_DIRECTIVE = """[INTERNAL ONBOARDING DIRECTIVE]
 This is the user's first conversation in ClawQuant.
@@ -497,7 +499,9 @@ class AIInterface:
         except Exception:
             logger.exception("LLM call failed")
             return "Sorry, I couldn't process that right now. Please try again."
-        self._append_message(channel_id, "assistant", response)
+        response, _ = strip_no_reply_sentinel(response)
+        if response:
+            self._append_message(channel_id, "assistant", response)
         return response
 
     async def handle_scheduled_prompt(
@@ -544,6 +548,7 @@ class AIInterface:
             logger.exception("Scheduled LLM call failed")
             return "Sorry, I couldn't process that scheduled run right now."
 
+        final_response, _ = strip_no_reply_sentinel(final_response)
         if persist_output and final_response:
             self._append_message(channel_id, "assistant", final_response)
 
@@ -883,11 +888,13 @@ class AIInterface:
             if not prompt:
                 return "Cannot create task. Handler 'ai.run_prompt' requires params.prompt."
 
-        # Default to the same conversation channel where the task was created.
-        params.setdefault("channel_id", channel_id)
-        output_names = set(self._registry.names("output"))
-        if source in output_names:
-            params.setdefault("adapter", source)
+        # "all" means broadcast to every output channel/adapter.
+        explicit_channel = params.get("channel_id")
+        if explicit_channel != "all":
+            params.setdefault("channel_id", channel_id)
+            output_names = set(self._registry.names("output"))
+            if source in output_names:
+                params.setdefault("adapter", source)
 
         task = Task(
             name=args["name"],

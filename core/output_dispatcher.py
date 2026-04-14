@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import logging
 
+from core.llm_output import strip_no_reply_sentinel
 from core.models.events import Event
 from core.registry import PluginRegistry
 
 logger = logging.getLogger(__name__)
+
+BROADCAST_CHANNEL_ID = "all"
 
 
 class OutputDispatcher:
@@ -27,8 +30,17 @@ class OutputDispatcher:
             logger.debug("integration.output ignored: missing text")
             return
 
+        text, should_deliver = strip_no_reply_sentinel(text)
+        if not should_deliver or not text:
+            logger.info("integration.output suppressed by NO_REPLY sentinel")
+            return
+
         channel_id = payload.get("channel_id")
         adapter_name = payload.get("adapter")
+
+        if channel_id == BROADCAST_CHANNEL_ID:
+            channel_id = None
+            adapter_name = None
 
         outputs = self._registry.get_all("output")
         delivered = 0

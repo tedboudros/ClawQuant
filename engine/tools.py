@@ -166,7 +166,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_task",
-            "description": "Create a new scheduled task. For recurring monitoring tasks, prefer handler ai.run_prompt.",
+            "description": "Create a new scheduled task. For recurring monitoring tasks, prefer handler ai.run_prompt. By default the task replies to the channel where it was created; set params.channel_id to 'all' to broadcast to every configured output channel/adapter.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -193,7 +193,7 @@ TOOLS = [
                     },
                     "params": {
                         "type": "object",
-                        "description": "Parameters to pass to the handler. For ai.run_prompt include params.prompt with the per-run execution instruction.",
+                        "description": "Parameters to pass to the handler. For ai.run_prompt include params.prompt with the per-run execution instruction. Set params.channel_id to a specific channel id, or 'all' to broadcast to every output channel. Defaults to the current conversation channel.",
                     },
                 },
                 "required": ["name", "handler"],

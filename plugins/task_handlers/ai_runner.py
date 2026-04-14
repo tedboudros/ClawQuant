@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from core.bus import AsyncIOBus
+from core.llm_output import strip_no_reply_sentinel
 from core.models.events import Event, EventTypes
 from core.models.tasks import TaskResult
 
@@ -53,6 +54,13 @@ class AIRunnerHandler:
             source=source,
             persist_output=True,
         )
+
+        response, should_deliver = strip_no_reply_sentinel(response)
+        if not should_deliver or not response:
+            return TaskResult(
+                status="success",
+                message="AI chose to stay silent (NO_REPLY sentinel)",
+            )
 
         await self._bus.publish(Event(
             type=EventTypes.INTEGRATION_OUTPUT,
