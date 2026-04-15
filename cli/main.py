@@ -2,7 +2,10 @@
 
 Usage:
     clawquant setup              Full interactive setup wizard
-    clawquant start              Start the server
+    clawquant start              Start the server (foreground)
+    clawquant start -d           Start the server in the background
+    clawquant stop               Stop a background server
+    clawquant logs               Follow server log output in realtime
     clawquant status             Show system status
     clawquant update             Pull latest code from GitHub
     clawquant config             Re-run the configuration wizard
@@ -17,9 +20,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import signal
 import subprocess
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
+
+LOG_FILENAME = "clawquant.log"
+PID_FILENAME = "clawquant.pid"
 
 
 def get_home_dir() -> Path:
@@ -218,6 +227,67 @@ def _count_commits_behind_upstream(repo_root: Path) -> int | None:
         return None
 
 
+def _pid_file_path() -> Path:
+    return get_home_dir() / PID_FILENAME
+
+
+def _log_file_path() -> Path:
+    return get_home_dir() / LOG_FILENAME
+
+
+def _read_pid() -> int | None:
+    """Read PID from file and verify the process is still alive."""
+    pf = _pid_file_path()
+    if not pf.exists():
+        return None
+    try:
+        pid = int(pf.read_text().strip())
+        os.kill(pid, 0)
+        return pid
+    except (ProcessLookupError, ValueError, OSError):
+        pf.unlink(missing_ok=True)
+        return None
+
+
+def _start_background(config_path: Path) -> None:
+    """Re-launch ClawQuant as a detached background process."""
+    log_file = _log_file_path()
+    pid_file = _pid_file_path()
+
+    existing = _read_pid()
+    if existing is not None:
+        print(f"  ClawQuant is already running (PID {existing}).")
+        print("  Use 'clawquant logs' to view output, or 'clawquant stop' first.")
+        sys.exit(1)
+
+    repo_root = _repo_root()
+    cmd = [sys.executable, "-m", "cli.main", "start"]
+
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(log_file, "a") as lf:
+        lf.write(f"\n{'=' * 60}\n")
+        lf.write(f"ClawQuant starting at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        lf.write(f"{'=' * 60}\n")
+        lf.flush()
+
+        proc = subprocess.Popen(
+            cmd,
+            cwd=repo_root,
+            stdout=lf,
+            stderr=lf,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+    pid_file.write_text(str(proc.pid))
+
+    print(f"  ClawQuant started in background (PID {proc.pid}).")
+    print(f"  Logs: {log_file}")
+    print("  Run 'clawquant logs' to follow output.")
+    print("  Run 'clawquant stop' to stop the server.")
+
+
 def cmd_setup(args: argparse.Namespace) -> None:
     """Run the interactive setup wizard."""
     from cli.setup import run_setup
@@ -231,6 +301,10 @@ def cmd_start(args: argparse.Namespace) -> None:
     if not config_path.exists():
         print("  No configuration found. Run 'clawquant setup' first.")
         sys.exit(1)
+
+    if getattr(args, "daemon", False):
+        _start_background(config_path)
+        return
 
     auto_update, install_commit = _load_update_preferences(config_path)
     repo_root = _repo_root()
@@ -254,6 +328,60 @@ def cmd_start(args: argparse.Namespace) -> None:
 
     try:
         asyncio.run(run(config_path=str(config_path)))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        _pid_file_path().unlink(missing_ok=True)
+
+
+def cmd_stop(args: argparse.Namespace) -> None:
+    """Stop a background ClawQuant server."""
+    pid = _read_pid()
+    if pid is None:
+        print("  ClawQuant is not running (no active PID found).")
+        return
+
+    print(f"  Stopping ClawQuant (PID {pid})...")
+    try:
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(50):
+            time.sleep(0.1)
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+        else:
+            print("  Process did not stop gracefully, forcing...")
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    except ProcessLookupError:
+        pass
+
+    _pid_file_path().unlink(missing_ok=True)
+    print("  ClawQuant stopped.")
+
+
+def cmd_logs(args: argparse.Namespace) -> None:
+    """Follow ClawQuant log output in realtime."""
+    log_file = _log_file_path()
+
+    if not log_file.exists():
+        print("  No log file found. Start ClawQuant first:")
+        print("    clawquant start -d")
+        sys.exit(1)
+
+    n = getattr(args, "lines", 50)
+    follow = not getattr(args, "no_follow", False)
+
+    cmd = ["tail", "-n", str(n)]
+    if follow:
+        cmd.append("-f")
+    cmd.append(str(log_file))
+
+    try:
+        subprocess.run(cmd)
     except KeyboardInterrupt:
         pass
 
@@ -431,7 +559,31 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("setup", help="Run the interactive setup wizard")
 
     # start
-    sub.add_parser("start", help="Start the ClawQuant server")
+    start_parser = sub.add_parser("start", help="Start the ClawQuant server")
+    start_parser.add_argument(
+        "-d", "--daemon",
+        action="store_true",
+        default=False,
+        help="Run the server in the background",
+    )
+
+    # stop
+    sub.add_parser("stop", help="Stop a background ClawQuant server")
+
+    # logs
+    logs_parser = sub.add_parser("logs", help="Follow server log output in realtime")
+    logs_parser.add_argument(
+        "-n", "--lines",
+        type=int,
+        default=50,
+        help="Number of lines to show initially (default: 50)",
+    )
+    logs_parser.add_argument(
+        "--no-follow",
+        action="store_true",
+        default=False,
+        help="Print log lines and exit (don't follow)",
+    )
 
     # status
     sub.add_parser("status", help="Show system status")
@@ -472,6 +624,8 @@ def main() -> None:
     commands = {
         "setup": cmd_setup,
         "start": cmd_start,
+        "stop": cmd_stop,
+        "logs": cmd_logs,
         "status": cmd_status,
         "update": cmd_update,
         "config": cmd_config,
