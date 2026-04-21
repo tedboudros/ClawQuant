@@ -368,7 +368,7 @@ class AIInterface:
         source: str,
         channel_id: str,
         persist_intermediate_messages: bool = False,
-        max_rounds: int = 25,
+        max_rounds: int = 100,
     ) -> str:
         """Run LLM tool-calling until completion, then return final user response."""
         available_tools = TOOLS + self._collect_plugin_tools()
