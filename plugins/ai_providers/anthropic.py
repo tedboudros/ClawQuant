@@ -12,9 +12,27 @@ from typing import Any
 
 import httpx
 
-from core.protocols import ToolCallResult
+from core.protocols import LLMProviderError, ToolCallResult
 
 logger = logging.getLogger(__name__)
+
+_MAX_BODY_LOG_CHARS = 2000
+
+
+def _extract_anthropic_error(body: str) -> str:
+    """Best-effort extraction of an Anthropic-shape error message."""
+    try:
+        data = json.loads(body)
+    except Exception:
+        return body[:_MAX_BODY_LOG_CHARS]
+    err = data.get("error") if isinstance(data, dict) else None
+    if isinstance(err, dict):
+        msg = err.get("message") or err.get("type") or ""
+        if msg:
+            return str(msg)
+    if isinstance(err, str):
+        return err
+    return body[:_MAX_BODY_LOG_CHARS]
 
 PLUGIN_META = {
     "name": "anthropic",
@@ -241,6 +259,54 @@ class AnthropicProvider:
             })
         return system_msg, user_messages
 
+    async def _post(self, body: dict[str, Any]) -> dict[str, Any]:
+        """POST and parse JSON, translating failures into ``LLMProviderError``."""
+        model = body.get("model", self._model)
+        try:
+            response = await self._client.post(self._url, json=body)
+        except httpx.HTTPError as exc:
+            logger.error(
+                "Anthropic request transport error (model=%s): %s", model, exc,
+            )
+            raise LLMProviderError(
+                f"network error contacting Anthropic: {exc}",
+                provider=self.name,
+                model=str(model),
+            ) from exc
+
+        if response.status_code >= 400:
+            body_text = response.text or ""
+            api_msg = _extract_anthropic_error(body_text)
+            logger.error(
+                "Anthropic API error (model=%s, status=%d): %s",
+                model,
+                response.status_code,
+                body_text[:_MAX_BODY_LOG_CHARS],
+            )
+            raise LLMProviderError(
+                api_msg or response.reason_phrase or "request failed",
+                provider=self.name,
+                model=str(model),
+                status_code=response.status_code,
+                response_body=body_text,
+            )
+
+        try:
+            return response.json()
+        except ValueError as exc:
+            logger.error(
+                "Anthropic returned non-JSON response (model=%s): %s",
+                model,
+                response.text[:_MAX_BODY_LOG_CHARS],
+            )
+            raise LLMProviderError(
+                "invalid JSON response from Anthropic",
+                provider=self.name,
+                model=str(model),
+                status_code=response.status_code,
+                response_body=response.text,
+            ) from exc
+
     async def complete(self, messages: list[dict], **kwargs: Any) -> str:
         """Send messages and return the text response."""
         system_msg, user_messages = self._split_messages(messages)
@@ -254,13 +320,11 @@ class AnthropicProvider:
         if system_msg:
             body["system"] = system_msg
 
-        response = await self._client.post(self._url, json=body)
-        response.raise_for_status()
-        data = response.json()
+        data = await self._post(body)
 
         # Extract text from content blocks
-        content = data.get("content", [])
-        text_parts = [block["text"] for block in content if block.get("type") == "text"]
+        content = data.get("content", []) if isinstance(data, dict) else []
+        text_parts = [block["text"] for block in content if isinstance(block, dict) and block.get("type") == "text"]
         return "\n".join(text_parts)
 
     async def tool_call(
@@ -292,19 +356,19 @@ class AnthropicProvider:
         if system_msg:
             body["system"] = system_msg
 
-        response = await self._client.post(self._url, json=body)
-        response.raise_for_status()
-        data = response.json()
+        data = await self._post(body)
 
-        content = data.get("content", [])
-        usage = data.get("usage", {})
+        content = data.get("content", []) if isinstance(data, dict) else []
+        usage = data.get("usage", {}) if isinstance(data, dict) else {}
 
         # Extract text and tool calls
         text_parts = []
         tool_calls = []
         for block in content:
+            if not isinstance(block, dict):
+                continue
             if block.get("type") == "text":
-                text_parts.append(block["text"])
+                text_parts.append(block.get("text", ""))
             elif block.get("type") == "tool_use":
                 # Normalize to OpenAI-style tool_call format for consistency
                 tool_calls.append({

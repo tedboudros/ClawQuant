@@ -202,6 +202,43 @@ class ToolCallResult:
         return len(self.tool_calls) > 0
 
 
+class LLMProviderError(RuntimeError):
+    """Raised when an LLM provider call fails.
+
+    Carries the upstream HTTP status code, response body (truncated by the
+    provider when needed), and provider/model identifiers so callers can log
+    actionable context and surface a helpful message to end users instead of
+    a bare ``HTTPStatusError``.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str = "",
+        model: str = "",
+        status_code: int | None = None,
+        response_body: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.provider = provider
+        self.model = model
+        self.status_code = status_code
+        self.response_body = response_body
+
+    def user_facing_summary(self) -> str:
+        """Short, single-line description suitable for chat replies."""
+        bits: list[str] = []
+        if self.provider:
+            bits.append(self.provider)
+        if self.model:
+            bits.append(self.model)
+        prefix = f"[{' · '.join(bits)}] " if bits else ""
+        if self.status_code is not None:
+            return f"{prefix}HTTP {self.status_code}: {self.args[0]}"
+        return f"{prefix}{self.args[0]}"
+
+
 # ---------------------------------------------------------------------------
 # 6. AIAgent -- individual analysis agent
 # ---------------------------------------------------------------------------

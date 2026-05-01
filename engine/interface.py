@@ -23,7 +23,7 @@ from core.models.events import Event, EventTypes
 from core.models.memories import Memory
 from core.models.signals import Position, Signal
 from core.models.tasks import Task
-from core.protocols import LLMProvider
+from core.protocols import LLMProvider, LLMProviderError
 from core.registry import PluginRegistry
 from engine.tools import TOOLS
 from risk.portfolio import PortfolioTracker
@@ -501,6 +501,9 @@ class AIInterface:
                 channel_id=channel_id,
                 persist_intermediate_messages=True,
             )
+        except LLMProviderError as exc:
+            logger.error("LLM call failed: %s", exc.user_facing_summary())
+            return f"Sorry, the AI provider rejected the request: {exc.user_facing_summary()}"
         except Exception:
             logger.exception("LLM call failed")
             return "Sorry, I couldn't process that right now. Please try again."
@@ -548,6 +551,14 @@ class AIInterface:
                 source=source,
                 channel_id=channel_id,
                 persist_intermediate_messages=False,
+            )
+        except LLMProviderError as exc:
+            logger.error(
+                "Scheduled LLM call failed: %s", exc.user_facing_summary(),
+            )
+            return (
+                "Sorry, the AI provider rejected the scheduled request: "
+                f"{exc.user_facing_summary()}"
             )
         except Exception:
             logger.exception("Scheduled LLM call failed")
