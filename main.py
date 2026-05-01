@@ -12,6 +12,9 @@ import asyncio
 import importlib
 import inspect
 import logging
+import os
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from aiohttp import web
 
@@ -26,14 +29,61 @@ from risk.portfolio import PortfolioTracker
 from scheduler.runner import Scheduler
 from server import create_app
 
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
-def setup_logging(level: str) -> None:
-    """Configure logging for the application."""
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+
+def _resolve_level(level: str | None) -> int:
+    """Map a textual level to a logging constant; defaults to INFO."""
+    if not level:
+        return logging.INFO
+    return getattr(logging, level.upper(), logging.INFO)
+
+
+def setup_logging(
+    level: str | None = "INFO",
+    *,
+    file_path: str | os.PathLike | None = None,
+    max_bytes: int = 10 * 1024 * 1024,
+    backup_count: int = 5,
+    add_stream: bool = True,
+) -> None:
+    """Configure logging for the application.
+
+    Idempotent: existing handlers on the root logger are removed first so this
+    can safely be called multiple times (e.g. once at process start with
+    defaults and again after `config.yaml` is loaded).
+    """
+    root = logging.getLogger()
+    root.setLevel(_resolve_level(level))
+
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        try:
+            handler.close()
+        except Exception:
+            pass
+
+    formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT)
+
+    if add_stream:
+        stream = logging.StreamHandler()
+        stream.setFormatter(formatter)
+        root.addHandler(stream)
+
+    if file_path:
+        path = Path(file_path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            path,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
+
     # Quiet down noisy libraries
     logging.getLogger("aiohttp").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -52,6 +102,16 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Path to .env file (default: ~/.clawquant/.env)",
+    )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        default=None,
+        choices=VALID_LOG_LEVELS,
+        help=(
+            "Override the log level (default: from config.yaml's logging.level "
+            "or INFO). Affects console and file handlers."
+        ),
     )
     return parser.parse_args()
 
@@ -402,12 +462,48 @@ async def _load_plugins(config, bus, store, registry, ai_interface: AIInterface)
             logger.error("Failed to load integration %s: %s", integration_name, e)
 
 
-async def run(config_path: str | None = None, env_path: str | None = None) -> None:
-    """Initialize all components and start the server."""
+async def run(
+    config_path: str | None = None,
+    env_path: str | None = None,
+    *,
+    cli_log_level: str | None = None,
+    log_to_file: bool = True,
+) -> None:
+    """Initialize all components and start the server.
+
+    If ``cli_log_level`` is provided it overrides ``config.logging.level``.
+    Set ``log_to_file=False`` when something else (e.g. the daemon launcher)
+    is already capturing stdout/stderr to the log file, to avoid duplicate
+    file writes.
+    """
     # Load configuration
     config = load_config(config_path=config_path, env_path=env_path)
+
+    # Now that config is loaded, reconfigure logging with the desired level
+    # and (in non-daemon mode) attach a rotating file handler.
+    effective_level = cli_log_level or config.logging.level
+    file_path: str | None = None
+    if log_to_file:
+        # `file` may be: None (default to <home>/clawquant.log), a path, or
+        # an empty string (explicitly disable file logging).
+        if config.logging.file is None:
+            file_path = str(config.home_path / "clawquant.log")
+        elif config.logging.file:
+            file_path = config.logging.file
+    setup_logging(
+        effective_level,
+        file_path=file_path,
+        max_bytes=config.logging.max_bytes,
+        backup_count=config.logging.backup_count,
+    )
+
     logger = logging.getLogger("clawquant")
     logger.info("Configuration loaded from %s", config.home_path)
+    logger.info(
+        "Logging at %s%s",
+        effective_level.upper(),
+        f" (file: {file_path})" if file_path else " (console only)",
+    )
 
     # Initialize core infrastructure
     store = Store(config.home_path)
@@ -506,9 +602,21 @@ async def run(config_path: str | None = None, env_path: str | None = None) -> No
 
 def main() -> None:
     args = parse_args()
-    setup_logging("INFO")
+    # Provisional logging so any setup-time messages are visible. `run()`
+    # reconfigures using config.yaml + CLI overrides once config is loaded.
+    setup_logging(args.log_level or "INFO")
+    # If a launcher is already capturing stdout/stderr to a file, skip the
+    # Python file handler to avoid duplicate records (see cli.main).
+    launched_by_daemon = os.environ.get("CLAWQUANT_DAEMON") == "1"
     try:
-        asyncio.run(run(config_path=args.config, env_path=args.env))
+        asyncio.run(
+            run(
+                config_path=args.config,
+                env_path=args.env,
+                cli_log_level=args.log_level,
+                log_to_file=not launched_by_daemon,
+            )
+        )
     except KeyboardInterrupt:
         pass
 

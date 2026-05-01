@@ -29,6 +29,7 @@ from pathlib import Path
 
 LOG_FILENAME = "clawquant.log"
 PID_FILENAME = "clawquant.pid"
+VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
 def get_home_dir() -> Path:
@@ -249,7 +250,54 @@ def _read_pid() -> int | None:
         return None
 
 
-def _start_background(config_path: Path) -> None:
+def _load_logging_settings(config_path: Path) -> tuple[str, int, int]:
+    """Read (level, max_bytes, backup_count) from config.yaml's logging section.
+
+    Falls back to sensible defaults if the file is missing or malformed.
+    Avoids importing the full Pydantic model so the CLI stays light.
+    """
+    level = "INFO"
+    max_bytes = 10 * 1024 * 1024
+    backup_count = 5
+    try:
+        import yaml
+        with open(config_path) as f:
+            data = yaml.safe_load(f) or {}
+        log_section = data.get("logging") or {}
+        level = str(log_section.get("level", level))
+        max_bytes = int(log_section.get("max_bytes", max_bytes))
+        backup_count = int(log_section.get("backup_count", backup_count))
+    except Exception:
+        pass
+    return level, max_bytes, backup_count
+
+
+def _rotate_log_file(log_file: Path, max_bytes: int, backup_count: int) -> None:
+    """Size-based pre-start rotation, mirroring RotatingFileHandler semantics.
+
+    Daemon mode redirects stdout/stderr directly into ``log_file``, so Python's
+    RotatingFileHandler can't manage rollover for us. We do it once at start.
+    """
+    try:
+        if max_bytes <= 0 or backup_count <= 0:
+            return
+        if not log_file.exists() or log_file.stat().st_size < max_bytes:
+            return
+        # Drop the oldest, then shift each backup up by one.
+        oldest = log_file.with_suffix(log_file.suffix + f".{backup_count}")
+        if oldest.exists():
+            oldest.unlink()
+        for i in range(backup_count - 1, 0, -1):
+            src = log_file.with_suffix(log_file.suffix + f".{i}")
+            dst = log_file.with_suffix(log_file.suffix + f".{i + 1}")
+            if src.exists():
+                src.rename(dst)
+        log_file.rename(log_file.with_suffix(log_file.suffix + ".1"))
+    except Exception as exc:
+        print(f"  Warning: could not rotate {log_file}: {exc}")
+
+
+def _start_background(config_path: Path, log_level: str | None = None) -> None:
     """Re-launch ClawQuant as a detached background process."""
     log_file = _log_file_path()
     pid_file = _pid_file_path()
@@ -262,12 +310,28 @@ def _start_background(config_path: Path) -> None:
 
     repo_root = _repo_root()
     cmd = [sys.executable, "-m", "cli.main", "start"]
+    if log_level:
+        cmd.extend(["--log-level", log_level])
 
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
+    config_level, max_bytes, backup_count = _load_logging_settings(config_path)
+    _rotate_log_file(log_file, max_bytes, backup_count)
+
+    effective_level = (log_level or config_level).upper()
+
+    # Tell the subprocess that stdout/stderr are already being captured to the
+    # log file, so it shouldn't also attach a Python RotatingFileHandler (which
+    # would cause every log record to appear twice in the file).
+    child_env = os.environ.copy()
+    child_env["CLAWQUANT_DAEMON"] = "1"
+
     with open(log_file, "a") as lf:
         lf.write(f"\n{'=' * 60}\n")
-        lf.write(f"ClawQuant starting at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        lf.write(
+            f"ClawQuant starting at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+            f"(log level: {effective_level})\n"
+        )
         lf.write(f"{'=' * 60}\n")
         lf.flush()
 
@@ -278,6 +342,7 @@ def _start_background(config_path: Path) -> None:
             stderr=lf,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
+            env=child_env,
         )
 
     pid_file.write_text(str(proc.pid))
@@ -302,8 +367,10 @@ def cmd_start(args: argparse.Namespace) -> None:
         print("  No configuration found. Run 'clawquant setup' first.")
         sys.exit(1)
 
+    log_level = getattr(args, "log_level", None)
+
     if getattr(args, "daemon", False):
-        _start_background(config_path)
+        _start_background(config_path, log_level=log_level)
         return
 
     auto_update, install_commit = _load_update_preferences(config_path)
@@ -324,10 +391,20 @@ def cmd_start(args: argparse.Namespace) -> None:
             print(f"  Auto-update is disabled. {behind} new {noun} available. Run 'clawquant update'.")
 
     from main import run, setup_logging
-    setup_logging("INFO")
+    # Provisional logging; `run()` reconfigures using config + CLI override.
+    setup_logging(log_level or "INFO")
+
+    # When launched by `_start_background`, stdout/stderr are already being
+    # captured to clawquant.log. Skip the Python file handler in that case to
+    # avoid duplicate records.
+    launched_by_daemon = os.environ.get("CLAWQUANT_DAEMON") == "1"
 
     try:
-        asyncio.run(run(config_path=str(config_path)))
+        asyncio.run(run(
+            config_path=str(config_path),
+            cli_log_level=log_level,
+            log_to_file=not launched_by_daemon,
+        ))
     except KeyboardInterrupt:
         pass
     finally:
@@ -565,6 +642,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Run the server in the background",
+    )
+    start_parser.add_argument(
+        "--log-level",
+        type=str,
+        default=None,
+        choices=VALID_LOG_LEVELS,
+        help=(
+            "Override the log level (default: from config.yaml's logging.level "
+            "or INFO). Use DEBUG to capture verbose logs in clawquant.log."
+        ),
     )
 
     # stop

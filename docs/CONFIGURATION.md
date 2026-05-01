@@ -177,10 +177,31 @@ scheduler:
       logins_b64: ${SELENIUM_LOGINS_B64}
 
 logging:
-  level: INFO
+  level: INFO            # DEBUG, INFO, WARNING, ERROR, CRITICAL
   audit_events: true
   llm_calls: true
+  # File logging (rotated by size). Defaults shown:
+  # file: ~/.clawquant/clawquant.log   # null -> default path; "" -> disable
+  # max_bytes: 10485760                # 10 MiB per file before rotation
+  # backup_count: 5                    # keep clawquant.log.1 .. .5
 ```
+
+### Logging notes
+
+- `level` controls what gets recorded for both the console and the rotating
+  log file. Set it to `DEBUG` to capture verbose output in `clawquant.log`
+  (useful when troubleshooting plugins or schedulers).
+- The level can be overridden per-invocation via:
+  - `clawquant start --log-level DEBUG`
+  - `clawquant start -d --log-level DEBUG` (daemon mode)
+  - `python main.py --log-level DEBUG`
+- In daemon mode (`clawquant start -d`) the launcher captures the subprocess's
+  stdout/stderr into `~/.clawquant/clawquant.log` and rotates the file at
+  start-up when it exceeds `max_bytes`, keeping `backup_count` historical
+  files.
+- In foreground mode a Python `RotatingFileHandler` writes the same records to
+  `clawquant.log` (or whatever `logging.file` points at), in addition to the
+  terminal.
 
 ---
 

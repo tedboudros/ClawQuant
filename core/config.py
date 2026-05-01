@@ -114,6 +114,13 @@ class LoggingConfig(BaseModel):
     level: str = "INFO"
     audit_events: bool = True
     llm_calls: bool = True
+    # File logging. If `file` is None, defaults to "<home>/clawquant.log".
+    # Set to an empty string to disable file logging entirely.
+    # Rotation is size-based and applied in both foreground (Python handler)
+    # and daemon (pre-start rotation in cli/main.py) modes.
+    file: str | None = None
+    max_bytes: int = 10 * 1024 * 1024  # 10 MiB
+    backup_count: int = 5
 
 
 class UpdatesConfig(BaseModel):
