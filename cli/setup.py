@@ -71,6 +71,25 @@ def run_setup(home_dir: Path | None = None) -> None:
     if auto_update is None:
         _abort()
 
+    existing_timezone = _load_existing_scheduler_timezone(home_dir)
+    tz_default = existing_timezone or "America/New_York"
+    tz_hint = (
+        f"(current: {existing_timezone})"
+        if existing_timezone
+        else "(default: America/New_York)"
+    )
+    timezone_str = questionary.text(
+        f"Scheduler timezone {tz_hint}:",
+        default=tz_default,
+        style=STYLE,
+    ).ask()
+    if timezone_str is None:
+        _abort()
+    timezone_str = timezone_str.strip() or tz_default
+    if not _is_valid_timezone(timezone_str):
+        print(f"  '{timezone_str}' is not a recognized IANA timezone; keeping '{tz_default}'.")
+        timezone_str = tz_default
+
     # Step 2: Discover all available plugins
     all_plugins = discover_plugins()
     existing_values = _load_existing_plugin_values(home_dir, all_plugins)
@@ -141,6 +160,7 @@ def run_setup(home_dir: Path | None = None) -> None:
         plugin_values=plugin_values,
         auto_update=bool(auto_update),
         install_commit=install_commit,
+        scheduler_timezone=timezone_str,
     )
 
     # Step 6: Install extra pip dependencies if any
@@ -375,6 +395,18 @@ def _configure_plugin(plugin: PluginInfo, existing: dict[str, Any] | None = None
         if value is not None:
             values[field.key] = value
 
+    # Preserve opaque structures the wizard doesn't directly expose as fields
+    # but that are round-tripped through `values` (e.g. the full `channels`
+    # list for integrations, which lets users add extra output-only channels
+    # in config.yaml without losing them on re-run).
+    field_keys = {field.key for field in plugin.config_fields}
+    for key, val in existing.items():
+        if key in field_keys or key in values:
+            continue
+        if val is None:
+            continue
+        values[key] = val
+
     extra_values = _run_plugin_setup_hook(
         plugin=plugin,
         existing=existing,
@@ -584,6 +616,11 @@ def _read_plugin_values_from_config(config: dict[str, Any], plugin: PluginInfo) 
                 if key in first:
                     integ[key] = first[key]
         values = integ
+        # Preserve the full channels list so re-runs of setup don't drop
+        # extra channels the user added manually (only chat_id/direction of
+        # the first channel are exposed via the wizard's flat fields).
+        if isinstance(channels, list) and channels:
+            values["channels"] = [dict(ch) for ch in channels if isinstance(ch, dict)]
     elif category == "risk_rule":
         values = (((config.get("risk") or {}).get("rules") or {}).get(plugin.name) or {}).copy()
     elif category == "task_handler":
@@ -592,8 +629,9 @@ def _read_plugin_values_from_config(config: dict[str, Any], plugin: PluginInfo) 
         values = (((config.get("ai") or {}).get("agents") or {}).get(plugin.name) or {}).copy()
 
     # Strip generic keys that are not direct field values
+    # (we intentionally keep `channels` for integrations so the full list
+    # -- including ones not surfaced by the wizard's flat fields -- survives.)
     values.pop("enabled", None)
-    values.pop("channels", None)
     return values
 
 
@@ -653,6 +691,41 @@ def _parse_bool(value: Any, default: bool = False) -> bool:
     if lowered in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _load_existing_scheduler_timezone(home_dir: Path) -> str:
+    """Read existing scheduler.timezone from config if present."""
+    config_path = home_dir / "config.yaml"
+    if not config_path.exists():
+        return ""
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f) or {}
+    except Exception:
+        return ""
+    scheduler = config.get("scheduler")
+    if not isinstance(scheduler, dict):
+        return ""
+    value = scheduler.get("timezone")
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _is_valid_timezone(name: str) -> bool:
+    if not name:
+        return False
+    try:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    except ImportError:
+        return True
+    try:
+        ZoneInfo(name)
+        return True
+    except ZoneInfoNotFoundError:
+        return False
+    except Exception:
+        return False
 
 
 def _load_existing_update_settings(home_dir: Path) -> tuple[bool, str]:

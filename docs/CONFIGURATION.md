@@ -233,6 +233,49 @@ When `selenium_browser` is enabled, setup includes an interactive credential-pro
 
 ---
 
+## Re-running `clawquant setup`
+
+The wizard is safe to re-run at any time. It fully manages these sections:
+
+- `ai.providers`, `ai.default_provider`, `ai.agents`
+- `market_data.providers`
+- `integrations` (all plugins like `telegram`, `discord`)
+- `risk.rules`
+- `scheduler.handlers`
+
+Everything else in `config.yaml` (e.g. `scheduler.timezone`, `scheduler.check_interval`,
+`scheduler.default_tasks`, `learning.*`, `position_tracking.*`, `logging.*`,
+`market_data.poll_interval`, `market_data.history_depth`, `ai.task_routing`, and any
+manual edits) is preserved across re-runs.
+
+The wizard also prompts for `scheduler.timezone` and defaults to whatever value is
+already in `config.yaml` (or `America/New_York` on first install).
+
+### Multiple Integration Channels
+
+The setup wizard only asks for one `chat_id`/`direction` pair per integration,
+but you can hand-edit additional channels into `config.yaml` -- they will be
+kept intact when you re-run `clawquant setup`. For example, to add a second
+Telegram channel that only receives signals:
+
+```yaml
+integrations:
+  telegram:
+    enabled: true
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    channels:
+      - id: personal
+        chat_id: "123456789"
+        direction: both
+      - id: signals_only
+        chat_id: "-1001234567890"
+        direction: output
+```
+
+Restart ClawQuant after editing.
+
+---
+
 ## Notes on Config Fields That Are Not Fully Wired Yet
 
 - `scheduler.default_tasks`: parsed, but startup currently does not auto-create those tasks.
