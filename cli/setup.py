@@ -499,7 +499,6 @@ def _verify_ai_provider(plugin: PluginInfo, values: dict[str, Any]) -> tuple[boo
             response = await provider.complete(
                 [{"role": "user", "content": "hi"}],
                 max_tokens=5,
-                temperature=0,
             )
             return response or ""
         finally:

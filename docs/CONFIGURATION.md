@@ -138,17 +138,14 @@ ai:
       api_key: ${ANTHROPIC_API_KEY}
       model: claude-sonnet-4-20250514
       max_tokens: 4096
-      temperature: 0.3
     openai:
       api_key: ${OPENAI_API_KEY}
       model: gpt-4o
       max_tokens: 4096
-      temperature: 0.3
     openrouter:
       api_key: ${OPENROUTER_API_KEY}
       model: openai/gpt-4o
       max_tokens: 4096
-      temperature: 0.3
 
   # parsed by config model; currently lightly used in runtime wiring
   task_routing: {}

@@ -86,7 +86,6 @@ class AIProviderConfig(BaseModel):
     api_key: str = ""
     model: str = ""
     max_tokens: int = 4096
-    temperature: float = 0.3
 
 
 class AIConfig(BaseModel):

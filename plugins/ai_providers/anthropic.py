@@ -67,15 +67,6 @@ PLUGIN_META = {
             "description": "Model name to use",
             "placeholder": "claude-sonnet-4-20250514",
         },
-        {
-            "key": "temperature",
-            "label": "Temperature",
-            "type": "number",
-            "required": False,
-            "default": 0.3,
-            "description": "Sampling temperature (0.0 = deterministic, 1.0 = creative)",
-            "placeholder": "0.3",
-        },
     ],
 }
 
@@ -93,11 +84,9 @@ class AnthropicProvider:
         api_key: str,
         model: str = "claude-sonnet-4-20250514",
         max_tokens: int = 4096,
-        temperature: float = 0.3,
     ) -> None:
         self._model = model
         self._max_tokens = max_tokens
-        self._temperature = temperature
         self._url = _DEFAULT_URL
         self._client = httpx.AsyncClient(
             timeout=120.0,
@@ -314,7 +303,6 @@ class AnthropicProvider:
         body: dict[str, Any] = {
             "model": kwargs.get("model", self._model),
             "max_tokens": kwargs.get("max_tokens", self._max_tokens),
-            "temperature": kwargs.get("temperature", self._temperature),
             "messages": user_messages,
         }
         if system_msg:
@@ -349,7 +337,6 @@ class AnthropicProvider:
         body: dict[str, Any] = {
             "model": kwargs.get("model", self._model),
             "max_tokens": kwargs.get("max_tokens", self._max_tokens),
-            "temperature": kwargs.get("temperature", self._temperature),
             "messages": user_messages,
             "tools": anthropic_tools,
         }

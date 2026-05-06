@@ -66,15 +66,6 @@ PLUGIN_META = {
             "description": "Model name to use",
             "placeholder": "gpt-4o",
         },
-        {
-            "key": "temperature",
-            "label": "Temperature",
-            "type": "number",
-            "required": False,
-            "default": 0.3,
-            "description": "Sampling temperature (0.0 = deterministic, 1.0 = creative)",
-            "placeholder": "0.3",
-        },
     ],
 }
 
@@ -93,11 +84,9 @@ class OpenAIProvider:
         model: str = "gpt-4o",
         base_url: str = _DEFAULT_URL,
         max_tokens: int = 4096,
-        temperature: float = 0.3,
     ) -> None:
         self._model = model
         self._max_tokens = max_tokens
-        self._temperature = temperature
         self._url = base_url
         self._client = httpx.AsyncClient(
             timeout=120.0,
@@ -165,7 +154,6 @@ class OpenAIProvider:
             "model": kwargs.get("model", self._model),
             "messages": messages,
             "max_tokens": kwargs.get("max_tokens", self._max_tokens),
-            "temperature": kwargs.get("temperature", self._temperature),
         }
 
         data = await self._post(body)
@@ -194,7 +182,6 @@ class OpenAIProvider:
             "model": kwargs.get("model", self._model),
             "messages": messages,
             "max_tokens": kwargs.get("max_tokens", self._max_tokens),
-            "temperature": kwargs.get("temperature", self._temperature),
             "tools": tools,
         }
 
