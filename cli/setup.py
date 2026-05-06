@@ -7,7 +7,9 @@ plugin file automatically makes it appear in the wizard.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
+import inspect
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +29,7 @@ from cli.scanner import (
     PluginInfo,
     discover_plugins,
 )
+from core.protocols import LLMProviderError
 
 # Questionary style
 STYLE = questionary.Style([
@@ -347,7 +350,12 @@ def _select_plugins(
 
 
 def _configure_plugin(plugin: PluginInfo, existing: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Walk through a plugin's config fields and collect values."""
+    """Walk through a plugin's config fields and collect values.
+
+    For AI providers, the collected values are verified by issuing a minimal
+    "hello world" completion before returning. If verification fails the user
+    is forced to re-enter the configuration; declining to retry aborts setup.
+    """
     if not plugin.config_fields:
         return {}
     existing = existing or {}
@@ -385,27 +393,56 @@ def _configure_plugin(plugin: PluginInfo, existing: dict[str, Any] | None = None
         else:
             return existing
 
+    field_keys = {field.key for field in plugin.config_fields}
+    seed = dict(existing)
     values: dict[str, Any] = {}
 
-    for field in visible_fields:
-        current = existing.get(field.key)
-        value = _prompt_field(field, plugin.display_name, current=current)
-        if value is None and _has_value(current):
-            value = current
-        if value is not None:
-            values[field.key] = value
+    while True:
+        values = {}
+        for field in visible_fields:
+            current = seed.get(field.key)
+            value = _prompt_field(field, plugin.display_name, current=current)
+            if value is None and _has_value(current):
+                value = current
+            if value is not None:
+                values[field.key] = value
 
-    # Preserve opaque structures the wizard doesn't directly expose as fields
-    # but that are round-tripped through `values` (e.g. the full `channels`
-    # list for integrations, which lets users add extra output-only channels
-    # in config.yaml without losing them on re-run).
-    field_keys = {field.key for field in plugin.config_fields}
-    for key, val in existing.items():
-        if key in field_keys or key in values:
-            continue
-        if val is None:
-            continue
-        values[key] = val
+        # Preserve opaque structures the wizard doesn't directly expose as
+        # fields but that are round-tripped through `values` (e.g. the full
+        # `channels` list for integrations, which lets users add extra
+        # output-only channels in config.yaml without losing them on re-run).
+        for key, val in existing.items():
+            if key in field_keys or key in values:
+                continue
+            if val is None:
+                continue
+            values[key] = val
+
+        if plugin.category != "ai_provider":
+            break
+
+        model_label = values.get("model") or "default model"
+        print(
+            f"\n  Verifying {plugin.display_name} (model: {model_label})...",
+            flush=True,
+        )
+        success, info = _verify_ai_provider(plugin, values)
+        if success:
+            print(f"  Verified. Sample response: {info}\n")
+            break
+
+        print(f"  Verification failed: {info}")
+        retry = questionary.confirm(
+            "Re-enter configuration?",
+            default=True,
+            style=STYLE,
+        ).ask()
+        if retry is None or not retry:
+            _abort()
+        # Seed the retry with the just-attempted values so the user only has
+        # to fix what was wrong (e.g. the model name) instead of re-typing
+        # every field.
+        seed = dict(values)
 
     extra_values = _run_plugin_setup_hook(
         plugin=plugin,
@@ -415,6 +452,79 @@ def _configure_plugin(plugin: PluginInfo, existing: dict[str, Any] | None = None
     values.update(extra_values)
 
     return values
+
+
+def _verify_ai_provider(plugin: PluginInfo, values: dict[str, Any]) -> tuple[bool, str]:
+    """Issue a minimal "hello world" completion to verify the provider+model combo.
+
+    The call uses ``max_tokens=5`` and a one-word user prompt so total token
+    usage stays in the single digits. Returns ``(success, info)`` where
+    ``info`` is a short response snippet on success or the upstream error
+    summary on failure.
+    """
+    if not plugin.class_name:
+        return True, "(no provider class to verify)"
+
+    try:
+        module = importlib.import_module(plugin.module_path)
+    except Exception as exc:
+        return False, f"could not import plugin module: {exc}"
+
+    cls = getattr(module, plugin.class_name, None)
+    if cls is None:
+        return False, f"class {plugin.class_name!r} not found in {plugin.module_path}"
+
+    try:
+        sig = inspect.signature(cls)
+    except (TypeError, ValueError):
+        return False, "could not inspect provider constructor"
+
+    accepted = set(sig.parameters.keys())
+    kwargs: dict[str, Any] = {
+        key: val
+        for key, val in values.items()
+        if key in accepted and val is not None
+    }
+
+    if "api_key" in accepted and not kwargs.get("api_key"):
+        return False, "missing api_key"
+
+    try:
+        provider = cls(**kwargs)
+    except Exception as exc:
+        return False, f"could not initialize provider: {exc}"
+
+    async def _ping() -> str:
+        try:
+            response = await provider.complete(
+                [{"role": "user", "content": "hi"}],
+                max_tokens=5,
+                temperature=0,
+            )
+            return response or ""
+        finally:
+            close = getattr(provider, "close", None)
+            if callable(close):
+                try:
+                    await close()
+                except Exception:
+                    pass
+
+    try:
+        response = asyncio.run(_ping())
+    except LLMProviderError as exc:
+        return False, exc.user_facing_summary()
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+    snippet = response.strip()
+    if not snippet:
+        return True, "(empty response, but call succeeded)"
+    if len(snippet) > 60:
+        snippet = snippet[:57] + "..."
+    return True, repr(snippet)
 
 
 def _prompt_field(field: ConfigField, plugin_name: str, current: Any = None) -> Any:
