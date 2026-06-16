@@ -198,6 +198,20 @@ async def _load_plugins(config, bus, store, registry, ai_interface: AIInterface)
                 )
                 registry.register("market_data", instance)
                 logger.info("Loaded market data provider: %s", provider_name)
+            elif provider_name == "finnhub":
+                from plugins.market_data.finnhub import FinnhubProvider
+                if not provider_config.api_key:
+                    logger.warning(
+                        "Finnhub provider is enabled but api_key is empty. "
+                        "Add FINNHUB_API_KEY to ~/.clawquant/.env and reference it "
+                        "as api_key: ${FINNHUB_API_KEY} in config.yaml."
+                    )
+                instance = FinnhubProvider(
+                    api_key=provider_config.api_key,
+                    tickers=provider_config.tickers,
+                )
+                registry.register("market_data", instance)
+                logger.info("Loaded market data provider: %s", provider_name)
         except Exception as e:
             logger.error("Failed to load market data provider %s: %s", provider_name, e)
 

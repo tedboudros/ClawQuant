@@ -10,4 +10,7 @@ questionary>=2.0
 
 # Plugin dependencies (install only what you use)
 # python-telegram-bot>=21.0    # Telegram integration
-# yfinance>=0.2                # Yahoo Finance market data
+# yfinance>=0.2                # Yahoo Finance market data (optional, not used by default)
+# selenium>=4.20.0             # Browser automation plugin
+# Finnhub market data uses httpx (already a core dep) -- no extra package needed.
+# Add FINNHUB_API_KEY to ~/.clawquant/.env to enable.

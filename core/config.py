@@ -53,6 +53,9 @@ class ServerConfig(BaseModel):
 class MarketDataProviderConfig(BaseModel):
     enabled: bool = True
     tickers: list[str] = Field(default_factory=list)
+    # API key for providers that require authentication (e.g. Finnhub).
+    # Supports ${ENV_VAR} references resolved from .env at load time.
+    api_key: str = ""
     # Provider-specific extra settings
     extra: dict = Field(default_factory=dict)
 
